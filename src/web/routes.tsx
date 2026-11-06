@@ -11,6 +11,8 @@ import { LoginPage } from "./pages/auth/LoginPage.tsx"
 import { SetupPage } from "./pages/auth/SetupPage.tsx"
 import { InboxPage } from "./pages/InboxPage.tsx"
 import { MorningPage } from "./pages/MorningPage.tsx"
+import { NotePage } from "./pages/NotePage.tsx"
+import { NotesPage } from "./pages/NotesPage.tsx"
 import { NotFoundPage } from "./pages/NotFoundPage.tsx"
 import { ProjectPage } from "./pages/ProjectPage.tsx"
 import { ProjectsPage } from "./pages/ProjectsPage.tsx"
@@ -25,6 +27,9 @@ export const PAGES: readonly PageRoute[] = [
   { id: "projects", path: "/projects", Component: ProjectsPage },
   { id: "project", path: "/projects/:projectId", Component: ProjectPage },
   { id: "inbox", path: "/inbox", Component: InboxPage },
+  { id: "notes", path: "/notes", Component: NotesPage },
+  // /notes/new writes a new note; any other id opens that note.
+  { id: "note", path: "/notes/:noteId", Component: NotePage },
   { id: "archive", path: "/archive", Component: ArchivePage },
   { id: "activity", path: "/activity", Component: ActivityPage },
   { id: "account", path: "/account", Component: AccountPage },

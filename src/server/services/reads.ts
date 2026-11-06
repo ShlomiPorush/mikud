@@ -16,6 +16,8 @@ import {
   goals,
   items,
   itemThreads,
+  notes,
+  noteVersions,
   projects,
   securitySources,
   stageProposals,
@@ -208,10 +210,23 @@ type AgentUpdate =
       from: string | null
       to: string | null
     }
+  | {
+      kind: "note"
+      at: Date
+      noteId: string
+      noteTitle: string
+      actorKind: string
+      actorLabel: string | null
+      change: "created" | "updated"
+    }
 
 const MAX_UPDATES = 300
 
-/** Comments and status changes by agents and the sync since `since`, grouped by project, newest first. */
+/**
+ * Comments, status changes and note versions by agents and the sync since `since`, grouped by project, newest
+ * first. Notes come from their versions, so an owner's later edit does not hide an agent's; notes without a
+ * project form their own group (`generalNotes`), apart from the inbox's items.
+ */
 async function agentUpdates(ctx: Ctx, since: Date, names: ReadonlyMap<string, string>) {
   const commentRows = await ctx.db
     .select({ comment: comments, title: items.title, projectId: items.projectId })
@@ -234,13 +249,23 @@ async function agentUpdates(ctx: Ctx, since: Date, names: ReadonlyMap<string, st
     )
     .orderBy(desc(audit.at))
     .limit(MAX_UPDATES)
+  const noteRows = await ctx.db
+    .select({ version: noteVersions, title: notes.title, projectId: notes.projectId })
+    .from(noteVersions)
+    .innerJoin(notes, eq(notes.id, noteVersions.noteId))
+    .where(and(gt(noteVersions.createdAt, since), inArray(noteVersions.authorKind, AGENT_KINDS)))
+    .orderBy(desc(noteVersions.createdAt))
+    .limit(MAX_UPDATES)
 
-  const groups = new Map<string, { projectId: string | null; projectName: string | null; updates: AgentUpdate[] }>()
+  type Group = { projectId: string | null; projectName: string | null; generalNotes: boolean; updates: AgentUpdate[] }
+  const groups = new Map<string, Group>()
   const add = (projectId: string | null, update: AgentUpdate) => {
-    const key = projectId ?? ""
+    const generalNotes = !projectId && update.kind === "note"
+    const key = projectId ?? (generalNotes ? "notes" : "")
     const group = groups.get(key) ?? {
       projectId,
       projectName: projectId ? (names.get(projectId) ?? null) : null,
+      generalNotes,
       updates: [],
     }
     group.updates.push(update)
@@ -270,6 +295,16 @@ async function agentUpdates(ctx: Ctx, since: Date, names: ReadonlyMap<string, st
       to: after?.status ?? null,
     })
   }
+  for (const r of noteRows)
+    add(r.projectId, {
+      kind: "note",
+      at: r.version.createdAt,
+      noteId: r.version.noteId,
+      noteTitle: r.title,
+      actorKind: r.version.authorKind,
+      actorLabel: r.version.authorLabel,
+      change: r.version.version === 1 ? "created" : "updated",
+    })
   const list = [...groups.values()]
   for (const g of list) g.updates.sort((a, b) => b.at.getTime() - a.at.getTime())
   return list.sort((a, b) => (b.updates[0]?.at.getTime() ?? 0) - (a.updates[0]?.at.getTime() ?? 0))
@@ -629,9 +664,10 @@ function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): S
   if (scope.action && use("action")) where.push(eq(audit.action, scope.action))
   // An audit row keeps the id as the request named it, which may be in capitals; the filters are lowercase.
   if (scope.projectId && use("projectId"))
-    // The project's own rows, and the rows of the items in it now (a comment or a thread is its item's row).
+    // The project's own rows, and the rows of the items and notes in it now (a comment or a thread is its item's
+    // row). A deleted note's rows have no project any more: they show only without the project filter.
     where.push(
-      sql`((${audit.entityType} = 'project' and lower(${audit.entityId}) = ${scope.projectId}) or (${audit.entityType} = 'item' and lower(${audit.entityId}) in (select ${items.id}::text from ${items} where ${items.projectId} = ${scope.projectId})))`,
+      sql`((${audit.entityType} = 'project' and lower(${audit.entityId}) = ${scope.projectId}) or (${audit.entityType} = 'item' and lower(${audit.entityId}) in (select ${items.id}::text from ${items} where ${items.projectId} = ${scope.projectId})) or (${audit.entityType} = 'note' and lower(${audit.entityId}) in (select ${notes.id}::text from ${notes} where ${notes.projectId} = ${scope.projectId})))`,
     )
   if (scope.itemId) where.push(sql`(${audit.entityType} = 'item' and lower(${audit.entityId}) = ${scope.itemId})`)
   if (scope.entityType) where.push(eq(audit.entityType, scope.entityType))
@@ -706,11 +742,12 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
         .groupBy(audit.action)
       const subject = sql<
         string | null
-      >`coalesce(case when ${audit.entityType} = 'project' then lower(${audit.entityId}) end, ${items.projectId}::text)`
+      >`coalesce(case when ${audit.entityType} = 'project' then lower(${audit.entityId}) end, ${items.projectId}::text, ${notes.projectId}::text)`
       const projectRows = await tx
         .select({ projectId: subject, count })
         .from(audit)
         .leftJoin(items, sql`${audit.entityType} = 'item' and ${items.id}::text = lower(${audit.entityId})`)
+        .leftJoin(notes, sql`${audit.entityType} = 'note' and ${notes.id}::text = lower(${audit.entityId})`)
         .where(and(...auditConditions(scope, ["projectId"])))
         .groupBy(subject)
 

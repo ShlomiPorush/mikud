@@ -269,15 +269,30 @@ function UpdateGroup({ group }: { group: AgentUpdateGroup }) {
     <details className="ui-fold">
       <summary>
         <ChevronRight aria-hidden="true" />
-        {group.projectName ? <bdi dir="auto">{group.projectName}</bdi> : t("inbox")}
+        {group.projectName ? (
+          <bdi dir="auto">{group.projectName}</bdi>
+        ) : group.generalNotes ? (
+          t("notes.general")
+        ) : (
+          t("inbox")
+        )}
         <span className="ui-count ui-num">{formatNumber(group.updates.length)}</span>
       </summary>
       {group.updates.map((update) => (
-        <div key={`${update.kind}-${update.itemId}-${update.at}`} className="ui-update">
+        <div
+          key={`${update.kind}-${update.kind === "note" ? update.noteId : update.itemId}-${update.at}`}
+          className="ui-update"
+        >
           <div>
-            <button type="button" className="ui-row-title" dir="auto" onClick={() => openItem(update.itemId)}>
-              {update.itemTitle}
-            </button>
+            {update.kind === "note" ? (
+              <Link className="ui-row-title" dir="auto" to={`/notes/${update.noteId}`}>
+                {update.noteTitle}
+              </Link>
+            ) : (
+              <button type="button" className="ui-row-title" dir="auto" onClick={() => openItem(update.itemId)}>
+                {update.itemTitle}
+              </button>
+            )}
             {update.kind === "comment" ? (
               <p className="ui-user" dir="auto">
                 {update.text}
@@ -289,6 +304,8 @@ function UpdateGroup({ group }: { group: AgentUpdateGroup }) {
                 <>
                   {t("morning.setStatus")} <StatusTag status={update.to} />
                 </>
+              ) : update.kind === "note" ? (
+                <span>{update.change === "created" ? t("morning.noteCreated") : t("morning.noteChanged")}</span>
               ) : (
                 <span>{t("morning.commented")}</span>
               )}

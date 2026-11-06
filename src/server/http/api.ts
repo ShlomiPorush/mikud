@@ -44,6 +44,7 @@ import {
   findNotes,
   getNoteVersion,
   listNoteVersions,
+  NOTE_ORDERS,
   NOTE_SORTS,
   noteDetail,
   restoreNote,
@@ -138,6 +139,7 @@ const findNotesQuery = z.object({
   general: bool.optional(),
   createdBy: actorKindSchema.optional(),
   sort: z.enum(NOTE_SORTS).optional(),
+  order: z.enum(NOTE_ORDERS).optional(),
   cursor: z.string().max(LIMITS.noteCursor).optional(),
   limit,
 })

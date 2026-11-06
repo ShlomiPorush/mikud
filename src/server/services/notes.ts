@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { and, asc, desc, eq, ilike, isNull, lt, or, type SQL, sql } from "drizzle-orm"
 import { LIMITS } from "../../shared/api.ts"
 import type { ActorKind } from "../../shared/enums.ts"
+import { plainExcerpt } from "../../shared/excerpt.ts"
 import { notes, noteVersions, projects } from "../db/schema.ts"
 import { AppError, invalid, notFound } from "../errors.ts"
 import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
@@ -254,6 +255,10 @@ export async function noteDetail(ctx: Ctx, id: string): Promise<NoteDetail> {
 
 export const NOTE_SORTS = ["updated", "title"] as const
 export type NoteSort = (typeof NOTE_SORTS)[number]
+export const NOTE_ORDERS = ["asc", "desc"] as const
+export type NoteOrder = (typeof NOTE_ORDERS)[number]
+/** The order each sort starts in: the newest change first, titles A to Z. */
+const FIRST_ORDER: Record<NoteSort, NoteOrder> = { updated: "desc", title: "asc" }
 
 export type FindNotesFilter = {
   q?: string
@@ -263,6 +268,8 @@ export type FindNotesFilter = {
   /** Who created the note. */
   createdBy?: ActorKind
   sort?: NoteSort
+  /** Defaults to the sort's first order. */
+  order?: NoteOrder
   cursor?: string
   limit?: number
 }
@@ -282,33 +289,33 @@ export type NoteSummary = {
   excerpt: string
 }
 
-const EXCERPT = 240
-
 function noteSummary(row: NoteRow): NoteSummary {
   const { body, ...rest } = row
-  const flat = body.replace(/\s+/g, " ").trim()
-  return { ...rest, excerpt: flat.length > EXCERPT ? `${flat.slice(0, EXCERPT - 1)}…` : flat }
+  return { ...rest, excerpt: plainExcerpt(body) }
 }
 
 /** A short hash of the filters and the sort, so a cursor pages only the list it came from. */
-function filterHash(filter: FindNotesFilter, sort: NoteSort): string {
+function filterHash(filter: FindNotesFilter, sort: NoteSort, order: NoteOrder): string {
   const scope = {
     q: filter.q || null,
     projectId: filter.projectId?.toLowerCase() ?? null,
     general: filter.general ?? false,
     createdBy: filter.createdBy ?? null,
     sort,
+    order,
   }
   return createHash("sha256").update(JSON.stringify(scope)).digest("base64url").slice(0, 16)
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Notes, newest change first or by title, paged by a cursor that is bound to the filters. */
+/** Notes by last change or by title, either way round, paged by a cursor that is bound to the filters. */
 export async function findNotes(ctx: Ctx, filter: FindNotesFilter = {}): Promise<Page<NoteSummary>> {
   const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200)
   const sort = filter.sort ?? "updated"
-  const hash = filterHash(filter, sort)
+  const order = filter.order ?? FIRST_ORDER[sort]
+  const hash = filterHash(filter, sort, order)
+  const after = order === "desc" ? sql.raw("<") : sql.raw(">")
   const where: SQL[] = []
   if (filter.q) {
     const pattern = `%${filter.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
@@ -325,17 +332,20 @@ export async function findNotes(ctx: Ctx, filter: FindNotesFilter = {}): Promise
     if (cursorHash !== hash) throw invalid("The cursor does not match the filters.")
     if (sort === "updated") {
       if (Number.isNaN(Date.parse(key))) throw invalid("The cursor is not valid.")
-      where.push(sql`(${notes.updatedAt}, ${notes.id}) < (${new Date(key).toISOString()}::timestamptz, ${id}::uuid)`)
+      where.push(
+        sql`(${notes.updatedAt}, ${notes.id}) ${after} (${new Date(key).toISOString()}::timestamptz, ${id}::uuid)`,
+      )
     } else {
-      where.push(sql`(${notes.title}, ${notes.id}) > (${key}, ${id}::uuid)`)
+      where.push(sql`(${notes.title}, ${notes.id}) ${after} (${key}, ${id}::uuid)`)
     }
   }
-  const order = sort === "updated" ? [desc(notes.updatedAt), desc(notes.id)] : [asc(notes.title), asc(notes.id)]
+  const by = order === "desc" ? desc : asc
+  const sortBy = sort === "updated" ? [by(notes.updatedAt), by(notes.id)] : [by(notes.title), by(notes.id)]
   const rows = await ctx.db
     .select()
     .from(notes)
     .where(and(...where))
-    .orderBy(...order)
+    .orderBy(...sortBy)
     .limit(limit + 1)
   const page = rows.slice(0, limit)
   const last = page[page.length - 1]

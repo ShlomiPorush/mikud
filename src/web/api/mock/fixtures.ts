@@ -9,6 +9,8 @@ import type {
   BrowserSession,
   Comment,
   Item,
+  Note,
+  NoteVersion,
   Project,
   SecuritySource,
   Settings,
@@ -99,6 +101,8 @@ export type MockState = {
   proposals: StageProposal[]
   sources: SecuritySource[]
   audit: AuditEntry[]
+  notes: Note[]
+  noteVersions: NoteVersion[]
   browserId: string
   /** Better Auth's list-sessions, the current one first. */
   sessions: BrowserSession[]
@@ -285,6 +289,7 @@ export function createState(): MockState {
       authorLabel: "agent:claude",
       text: "Reproduced on staging, fixed the expiry order, added a test that fails on the old code. Waiting for the merge approval.",
       threadId: "thr_7f3a9c21e4",
+      noteId: null,
       createdAt: ago(2),
     },
     {
@@ -294,6 +299,7 @@ export function createState(): MockState {
       authorLabel: "agent:codex",
       text: "Found the race: the reconnect handler clears the queue before the last flush finishes.",
       threadId: null,
+      noteId: null,
       createdAt: ago(1),
     },
   ]
@@ -350,6 +356,99 @@ export function createState(): MockState {
     source(beacon, "secret_scanning", "no_access", [0, 0, 0, 0], null),
     source(tidepool, "dependabot", "enabled", [0, 1, 0, 2], 9),
   ]
+
+  // Notes: each with its versions, the newest last.
+  const notes: Note[] = []
+  const noteVersions: NoteVersion[] = []
+  const note = (
+    p: Project | null,
+    title: string,
+    versions: { body: string; by: "owner" | "agent"; label: string; hoursAgo: number }[],
+  ) => {
+    const id = uuid()
+    for (const [index, v] of versions.entries())
+      noteVersions.push({
+        id: uuid(),
+        noteId: id,
+        version: index + 1,
+        title,
+        body: v.body,
+        projectId: p?.id ?? null,
+        authorKind: v.by,
+        authorLabel: v.label,
+        restoredFrom: null,
+        createdAt: ago(v.hoursAgo),
+      })
+    const first = versions[0]
+    const last = versions[versions.length - 1]
+    if (!first || !last) return
+    notes.push({
+      id,
+      projectId: p?.id ?? null,
+      title,
+      body: last.body,
+      version: versions.length,
+      createdBy: first.by,
+      createdByLabel: first.label,
+      updatedBy: last.by,
+      updatedByLabel: last.label,
+      createdAt: ago(first.hoursAgo),
+      updatedAt: ago(last.hoursAgo),
+    })
+  }
+  note(lantern, "How the importer retries", [
+    {
+      body: "The importer retries a failed batch three times.",
+      by: "agent",
+      label: "agent:claude",
+      hoursAgo: 30,
+    },
+    {
+      body: [
+        "## Retries",
+        "",
+        "A failed batch is retried **three times**, 30 seconds apart. After that it waits for the next run.",
+        "",
+        "- Network errors retry.",
+        "- A `422` answer never retries: the data is wrong.",
+        "",
+        "| Attempt | Wait |",
+        "| --- | --- |",
+        "| 1 | 30 s |",
+        "| 2 | 60 s |",
+        "| 3 | 120 s |",
+        "",
+        "```",
+        "IMPORT_RETRIES=3",
+        "```",
+        "",
+        "See [the retry design](https://example.com/retry-design).",
+      ].join("\n"),
+      by: "agent",
+      label: "agent:codex",
+      hoursAgo: 3,
+    },
+  ])
+  note(tidepool, "Why the beta stays invite-only", [
+    {
+      body: "Decided on the call: the beta stays invite-only until imports run clean for a month.\n\n> Reopen the question in December.",
+      by: "owner",
+      label: "owner",
+      hoursAgo: 48,
+    },
+  ])
+  note(null, "Release checklist", [
+    { body: "1. Tag\n2. Push", by: "owner", label: "owner", hoursAgo: 72 },
+    {
+      body: "1. Tag\n2. Push\n3. Watch the CI of main until it is green",
+      by: "agent",
+      label: "agent:claude",
+      hoursAgo: 5,
+    },
+  ])
+  note(null, "Reading list", [
+    { body: "- [The Website Specification](https://example.com/spec)", by: "owner", label: "owner", hoursAgo: 200 },
+  ])
 
   const audit: AuditEntry[] = []
   let auditId = 1000
@@ -496,6 +595,8 @@ export function createState(): MockState {
     proposals,
     sources,
     audit,
+    notes,
+    noteVersions,
     browserId: uuid(),
     sessions,
     endedOthers: false,

@@ -14,6 +14,13 @@ import type {
   ItemPatch,
   ItemSummary,
   Morning,
+  Note,
+  NoteDetail,
+  NoteFilters,
+  NotePatch,
+  NoteSummary,
+  NoteVersion,
+  NoteVersionSummary,
   Page,
   Project,
   ProjectDetail,
@@ -96,6 +103,25 @@ export const api = {
   audit: (filters: AuditFilters, cursor: string | null) => auditPage(filters, cursor),
   syncRuns: () => data<SyncRun[]>("GET", "/sync/runs?limit=10"),
 
+  notes: (filters: NoteFilters, cursor: string | null) =>
+    page<NoteSummary>(
+      `/notes${query({ ...filters, general: filters.general ? "true" : undefined, cursor, limit: 50 })}`,
+    ),
+  note: (noteId: string) => data<NoteDetail>("GET", `/notes/${id(noteId)}`),
+  createNote: (input: { title: string; body?: string; projectId?: string | null }) =>
+    data<Note>("POST", "/notes", input),
+  /** Optimistic concurrency: the server refuses with version_conflict when `version` is stale. */
+  updateNote: (noteId: string, version: number, patch: NotePatch) =>
+    data<Note>("PATCH", `/notes/${id(noteId)}`, { version, ...patch }),
+  /** Deletes the note with its versions, only at the version the owner saw. */
+  deleteNote: (noteId: string, version: number) => request<null>("DELETE", `/notes/${id(noteId)}${query({ version })}`),
+  noteVersions: (noteId: string, cursor: string | null) =>
+    page<NoteVersionSummary>(`/notes/${id(noteId)}/versions${query({ cursor, limit: 50 })}`),
+  noteVersion: (noteId: string, version: number) =>
+    data<NoteVersion>("GET", `/notes/${id(noteId)}/versions/${version}`),
+  restoreNote: (noteId: string, expectedVersion: number, fromVersion: number) =>
+    data<Note>("POST", `/notes/${id(noteId)}/restore`, { expectedVersion, fromVersion }),
+
   settings: () => data<Settings>("GET", "/settings"),
   updateSettings: (patch: SettingsPatch) => data<Settings>("PATCH", "/settings", patch),
   telegramStatus: () => data<TelegramStatus>("GET", "/telegram/status"),
@@ -120,6 +146,12 @@ export const qk = {
   audit: ["audit"] as const,
   /** One list per set of filters: a change of filters is a new list from its first page. */
   auditFiltered: (filters: AuditFilters) => ["audit", filters] as const,
+  /** Every notes list; one per set of filters, so a change of filters is a new list from its first page. */
+  notes: ["notes"] as const,
+  notesFiltered: (filters: NoteFilters) => ["notes", filters] as const,
+  note: (noteId: string) => ["note", noteId] as const,
+  noteVersions: (noteId: string) => ["note", noteId, "versions"] as const,
+  noteVersion: (noteId: string, version: number) => ["note", noteId, "version", version] as const,
   settings: ["settings"] as const,
   syncRuns: ["sync-runs"] as const,
   telegram: ["telegram"] as const,

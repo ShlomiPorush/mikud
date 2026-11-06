@@ -160,10 +160,11 @@ describe("morning", () => {
     const updates = (await morning(t.ctx)).agentUpdates
     expect(updates).toHaveLength(1)
     expect(updates[0]?.projectName).toBe("Kite")
-    expect(updates[0]?.updates.map((u) => (u.kind === "status" ? `${u.from}->${u.to}` : u.text)).sort()).toEqual([
-      "Built the parser.",
-      "todo->in_progress",
-    ])
+    expect(
+      updates[0]?.updates
+        .map((u) => (u.kind === "status" ? `${u.from}->${u.to}` : u.kind === "comment" ? u.text : u.noteTitle))
+        .sort(),
+    ).toEqual(["Built the parser.", "todo->in_progress"])
   })
 
   it("lists projects with open items with goal progress, and the inbox count", async () => {

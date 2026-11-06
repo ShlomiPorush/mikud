@@ -5,8 +5,19 @@
 
 import { auditCodesMatching } from "../../../shared/audit-search.ts"
 import { ACTOR_KINDS, type ActorKind, type ItemStatus, type Language, type Stage } from "../../../shared/enums.ts"
+import { plainExcerpt } from "../../../shared/excerpt.ts"
 import type { TransportRequest, TransportResponse } from "../client.ts"
-import type { AuditCounts, AuditEntry, Item, ItemSummary, Morning, ProjectListEntry, SecurityLine } from "../types.ts"
+import type {
+  AuditCounts,
+  AuditEntry,
+  Item,
+  ItemSummary,
+  Morning,
+  Note,
+  NoteSummary,
+  ProjectListEntry,
+  SecurityLine,
+} from "../types.ts"
 import { ago, createState, type MockState, uuid } from "./fixtures.ts"
 
 const state: MockState = createState()
@@ -141,11 +152,27 @@ function morning(): Morning {
       change: item.createdAt > since ? ("created" as const) : ("updated" as const),
       item: summary(item),
     }))
-  const groups = new Map<string | null, Morning["agentUpdates"][number]>()
+  const groups = new Map<string, Morning["agentUpdates"][number]>()
   const push = (projectId: string | null, update: Morning["agentUpdates"][number]["updates"][number]) => {
-    const group = groups.get(projectId) ?? { projectId, projectName: projectName(projectId), updates: [] }
+    const generalNotes = !projectId && update.kind === "note"
+    const key = projectId ?? (generalNotes ? "notes" : "")
+    const group = groups.get(key) ?? { projectId, projectName: projectName(projectId), generalNotes, updates: [] }
     group.updates.push(update)
-    groups.set(projectId, group)
+    groups.set(key, group)
+  }
+  for (const version of state.noteVersions) {
+    if (version.createdAt <= since || version.authorKind === "owner") continue
+    const current = state.notes.find((entry) => entry.id === version.noteId)
+    if (current)
+      push(current.projectId, {
+        kind: "note",
+        at: version.createdAt,
+        noteId: current.id,
+        noteTitle: current.title,
+        actorKind: version.authorKind,
+        actorLabel: version.authorLabel ?? "",
+        change: version.version === 1 ? "created" : "updated",
+      })
   }
   for (const comment of state.comments) {
     if (comment.createdAt <= since || comment.authorKind === "owner") continue
@@ -239,6 +266,7 @@ type AuditFacet = "actorKind" | "agent" | "action" | "projectId"
 function auditProject(entry: AuditEntry): string | null {
   if (entry.entityType === "project") return entry.entityId
   if (entry.entityType === "item") return state.items.find((item) => item.id === entry.entityId)?.projectId ?? null
+  if (entry.entityType === "note") return state.notes.find((note) => note.id === entry.entityId)?.projectId ?? null
   return null
 }
 
@@ -311,10 +339,150 @@ function auditAnswer(params: URLSearchParams): TransportResponse {
   return { status: 200, body: { ...(listed.body as object), total: rows.length, counts } }
 }
 
+function noteSummary(note: Note): NoteSummary {
+  const { body, ...rest } = note
+  return { ...rest, excerpt: plainExcerpt(body) }
+}
+
+/** A new version of a note in the mock: the note changes and its versions grow by one. */
+function writeNoteVersion(note: Note, restoredFrom: number | null) {
+  note.version++
+  note.updatedAt = new Date().toISOString()
+  note.updatedBy = "owner"
+  note.updatedByLabel = "owner"
+  state.noteVersions.push({
+    id: uuid(),
+    noteId: note.id,
+    version: note.version,
+    title: note.title,
+    body: note.body,
+    projectId: note.projectId,
+    authorKind: "owner",
+    authorLabel: "owner",
+    restoredFrom,
+    createdAt: note.updatedAt,
+  })
+}
+
+const noteConflict = (note: Note): TransportResponse => ({
+  status: 409,
+  body: {
+    error: { code: "version_conflict", message: "The note changed since you read it.", currentVersion: note.version },
+  },
+})
+
+/** The notes routes of docs/api.md over the mock state. */
+function notesRoute(
+  method: string,
+  url: URL,
+  path: { id: string | undefined; sub: string | undefined; rest: string[] },
+  body: Record<string, unknown>,
+): TransportResponse {
+  const { id, sub, rest } = path
+  const p = url.searchParams
+  if (!id && method === "GET") {
+    const q = (p.get("q") ?? "").toLowerCase()
+    const rows = state.notes.filter(
+      (note) =>
+        (!q || note.title.toLowerCase().includes(q) || note.body.toLowerCase().includes(q)) &&
+        (!p.get("projectId") || note.projectId === p.get("projectId")) &&
+        (p.get("general") !== "true" || note.projectId === null) &&
+        (!p.get("createdBy") || note.createdBy === p.get("createdBy")),
+    )
+    const title = p.get("sort") === "title"
+    const flip = (p.get("order") ?? (title ? "asc" : "desc")) === "desc" ? -1 : 1
+    rows.sort((a, b) => flip * (title ? a.title.localeCompare(b.title) : a.updatedAt.localeCompare(b.updatedAt)))
+    return page(rows.map(noteSummary), p.get("cursor"), Number(p.get("limit") ?? 50))
+  }
+  if (!id && method === "POST") {
+    const now = new Date().toISOString()
+    const note: Note = {
+      id: uuid(),
+      projectId: (body.projectId as string | null) ?? null,
+      title: String(body.title ?? "").trim(),
+      body: String(body.body ?? ""),
+      version: 0,
+      createdBy: "owner",
+      createdByLabel: "owner",
+      updatedBy: "owner",
+      updatedByLabel: "owner",
+      createdAt: now,
+      updatedAt: now,
+    }
+    if (!note.title) return fail(400, "validation_failed", "The title is empty.")
+    state.notes.unshift(note)
+    writeNoteVersion(note, null)
+    record("note.create", "note", note.id, null, { title: note.title, version: 1 })
+    return ok(note, 201)
+  }
+  const note = state.notes.find((entry) => entry.id === id)
+  if (!note) return fail(404, "not_found", "The note was not found.")
+  if (!sub && method === "GET") {
+    const project = state.projects.find((entry) => entry.id === note.projectId)
+    return ok({ note, project: project ? { id: project.id, name: project.name } : null })
+  }
+  if (!sub && method === "PATCH") {
+    if (body.version !== note.version) return noteConflict(note)
+    const next = {
+      title: body.title !== undefined ? String(body.title).trim() : note.title,
+      body: body.body !== undefined ? String(body.body) : note.body,
+      projectId: body.projectId !== undefined ? ((body.projectId as string | null) ?? null) : note.projectId,
+    }
+    if (next.title === note.title && next.body === note.body && next.projectId === note.projectId) return ok(note)
+    const before = { title: note.title, version: note.version }
+    Object.assign(note, next)
+    writeNoteVersion(note, null)
+    record("note.update", "note", note.id, before, { title: note.title, version: note.version })
+    return ok(note)
+  }
+  if (!sub && method === "DELETE") {
+    if (Number(p.get("version")) !== note.version) return noteConflict(note)
+    state.notes = state.notes.filter((entry) => entry.id !== note.id)
+    state.noteVersions = state.noteVersions.filter((entry) => entry.noteId !== note.id)
+    record("note.delete", "note", note.id, { title: note.title, version: note.version }, null)
+    return { status: 204, body: null }
+  }
+  const versions = state.noteVersions.filter((entry) => entry.noteId === note.id).sort((a, b) => b.version - a.version)
+  if (sub === "versions" && rest.length === 0) {
+    const summaries = versions.map((v) => ({
+      version: v.version,
+      title: v.title,
+      projectId: v.projectId,
+      authorKind: v.authorKind,
+      authorLabel: v.authorLabel,
+      restoredFrom: v.restoredFrom,
+      createdAt: v.createdAt,
+      bodyLength: v.body.length,
+    }))
+    return page(summaries, p.get("cursor"), Number(p.get("limit") ?? 50))
+  }
+  if (sub === "versions") {
+    const version = versions.find((entry) => entry.version === Number(rest[0]))
+    return version ? ok(version) : fail(404, "not_found", "The version was not found.")
+  }
+  if (sub === "restore" && method === "POST") {
+    if (body.expectedVersion !== note.version) return noteConflict(note)
+    const from = versions.find((entry) => entry.version === body.fromVersion)
+    if (!from) return fail(404, "not_found", "The version was not found.")
+    if (from.projectId && !state.projects.some((project) => project.id === from.projectId))
+      return fail(409, "conflict", "The project of that version was deleted. Move the note instead.")
+    const before = { title: note.title, version: note.version }
+    Object.assign(note, { title: from.title, body: from.body, projectId: from.projectId })
+    writeNoteVersion(note, from.version)
+    record("note.restore", "note", note.id, before, {
+      title: note.title,
+      version: note.version,
+      restoredFrom: from.version,
+    })
+    return ok(note)
+  }
+  return fail(404, "not_found", "Not found.")
+}
+
 function route(method: string, path: string, body: Record<string, unknown>): TransportResponse {
   const url = new URL(path, "http://mock.invalid")
   const parts = url.pathname.split("/").filter(Boolean)
-  const [head, id, sub] = parts
+  const [head, id, sub, ...rest] = parts
 
   if (url.pathname === "/api/setup/status") return ok({ hasUser: true, session: "active" })
   if (head === "session" && method === "GET")
@@ -439,6 +607,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
         authorLabel: "owner",
         text: String(body.text),
         threadId: null,
+        noteId: null,
         createdAt: new Date().toISOString(),
       }
       state.comments.push(comment)
@@ -524,6 +693,7 @@ function route(method: string, path: string, body: Record<string, unknown>): Tra
     return page(closed.map(summary), url.searchParams.get("cursor"), Number(url.searchParams.get("limit") ?? 50))
   }
   if (head === "audit") return auditAnswer(url.searchParams)
+  if (head === "notes") return notesRoute(method, url, { id, sub, rest }, body)
   if (head === "sync" && id === "runs")
     return ok([
       {

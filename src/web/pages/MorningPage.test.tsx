@@ -78,6 +78,7 @@ const MORNING: Morning = {
     {
       projectId: "p-lantern",
       projectName: "Lantern",
+      generalNotes: false,
       updates: [
         {
           kind: "comment",
@@ -242,6 +243,7 @@ describe("agent updates", () => {
         {
           projectId: "p-lantern",
           projectName: "Lantern",
+          generalNotes: false,
           updates: [
             { ...update, actorLabel: "agent:garden" },
             { ...update, at: "2026-11-02T06:20:00.000Z", actorKind: "sync", actorLabel: "sync" },

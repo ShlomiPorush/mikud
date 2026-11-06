@@ -505,6 +505,11 @@ function ItemBody({
             <p className="ui-text-block" dir="auto">
               {entry.text}
             </p>
+            {entry.noteId ? (
+              <Link className="ui-link" to={`/notes/${entry.noteId}`}>
+                {t("item.openNote")}
+              </Link>
+            ) : null}
           </article>
         ))}
         <form className="ui-form-stack" onSubmit={addComment} noValidate>

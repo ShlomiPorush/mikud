@@ -1,5 +1,5 @@
 // The audit log: every change by anyone, newest first, loaded by cursor as the end scrolls into view.
-// An item entry opens the item; a project entry opens the project.
+// An item entry opens the item; a project or note entry opens its page.
 //
 // The filter bar (v3 MP-6, TB-17, TB-18, NL-3): the search and Who at every size, Agent, Action and Project behind
 // the Filters button, and an item named by a link (the item dialog's "All activity"). The filters live in the
@@ -338,6 +338,13 @@ function EntityLink({ entry }: { entry: AuditEntry }) {
       <button type="button" className="ui-row-title" dir="auto" onClick={() => openItem(entry.entityId)}>
         {label}
       </button>
+    )
+  }
+  if (entry.entityType === "note" && !gone) {
+    return (
+      <Link to={`/notes/${entry.entityId}`} className="ui-row-title" dir="auto">
+        {label}
+      </Link>
     )
   }
   if (entry.entityType === "project" && !gone) {

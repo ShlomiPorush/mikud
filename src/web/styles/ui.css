@@ -3566,7 +3566,7 @@ html.ui-layer-on .ui-page {
   text-align: right;
 }
 [dir="ltr"] [dir="auto"] {
-  text-align: left;
+  text-align: start;
 }
 /* A title that is a button keeps to its column, so a long title ends in an ellipsis instead of overflowing */
 .ui-row-title {
@@ -3834,4 +3834,168 @@ button.ui-item-title {
   background: var(--ui-raise);
   font-size: var(--ui-fs-ctl);
   list-style: none;
+}
+
+/* ---------- Notes: list rows, the note page and Markdown ---------- */
+
+.ui-note-row {
+  color: inherit;
+  text-decoration: none;
+}
+.ui-note-excerpt {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-muted);
+  font-size: var(--ui-fs-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-panel-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-inline-start: auto;
+  font-size: var(--ui-fs-ctl);
+}
+.ui-note-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr);
+  gap: var(--ui-gap);
+  align-items: end;
+}
+.ui-note-body {
+  min-height: 360px;
+  font-family: var(--ui-mono);
+  font-size: var(--ui-fs-ctl);
+  line-height: 1.55;
+  resize: vertical;
+}
+.ui-inline-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  color: var(--ui-muted);
+}
+.ui-note-version-title {
+  margin: 0;
+  font-size: var(--ui-fs-item);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+@media (max-width: 760px) {
+  .ui-note-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ui-note-body {
+    min-height: 260px;
+    font-size: var(--ui-fs-field-phone);
+  }
+}
+
+/* Markdown a note renders. Blocks take their own text's direction (dir="auto"); code reads left to right. */
+.ui-md {
+  max-width: 80ch;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.ui-md > :first-child {
+  margin-top: 0;
+}
+.ui-md > :last-child {
+  margin-bottom: 0;
+}
+.ui-md-table {
+  overflow-x: auto;
+}
+.ui-md :where(p, ul, ol, blockquote, pre, .ui-md-table) {
+  margin: 0 0 12px;
+}
+.ui-md h2,
+.ui-md h3,
+.ui-md h4,
+.ui-md h5,
+.ui-md h6 {
+  margin: 18px 0 8px;
+  line-height: 1.3;
+}
+.ui-md h2 {
+  font-size: var(--ui-fs-item);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ui-md h3 {
+  font-size: var(--ui-fs-h2);
+  font-weight: 650;
+}
+.ui-md h4,
+.ui-md h5,
+.ui-md h6 {
+  font-size: var(--ui-fs);
+  font-weight: 650;
+}
+.ui-md ul,
+.ui-md ol {
+  padding-inline-start: 22px;
+}
+.ui-md li + li {
+  margin-top: 3px;
+}
+.ui-md blockquote {
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--ui-line);
+  color: var(--ui-muted);
+}
+.ui-md a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ui-md code {
+  padding: 1px 5px;
+  border-radius: var(--ui-radius-tag);
+  background: var(--ui-fill);
+  font-family: var(--ui-mono);
+  font-size: 0.9em;
+}
+.ui-md pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-fill);
+  text-align: start;
+}
+.ui-md pre code {
+  padding: 0;
+  background: none;
+}
+.ui-md table {
+  border-collapse: collapse;
+  font-size: var(--ui-fs-sm);
+}
+.ui-md th,
+.ui-md td {
+  padding: 6px 10px;
+  border: 1px solid var(--ui-line);
+  text-align: start;
+}
+.ui-md th {
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+.ui-md hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--ui-line);
+}
+.ui-md input[type="checkbox"] {
+  margin-inline-end: 6px;
+  vertical-align: -1px;
+}
+
+/* A note is a document: each block lines up with its own direction, so an English list or table in a Hebrew
+   note reads like one, markers and columns included (a deliberate exception to RT-2 for rendered Markdown). */
+[dir] .ui-md [dir="auto"] {
+  text-align: start;
 }

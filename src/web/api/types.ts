@@ -150,8 +150,61 @@ export type Comment = {
   authorLabel: string
   text: string
   threadId: string | null
+  /** The note this comment points to (the Telegram bot moved the item's text into it); null once deleted. */
+  noteId: string | null
   createdAt: string
 }
+
+/** A note (docs/api.md, Shapes): knowledge with a Markdown body; `projectId` null for a general note. */
+export type Note = {
+  id: string
+  projectId: string | null
+  title: string
+  body: string
+  version: number
+  createdBy: ActorKind
+  createdByLabel: string | null
+  updatedBy: ActorKind
+  updatedByLabel: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** A note in a list: no body, the start of it on one line. */
+export type NoteSummary = Omit<Note, "body"> & { excerpt: string }
+
+export type NoteDetail = { note: Note; project: { id: string; name: string } | null }
+
+export type NoteVersion = {
+  id: string
+  noteId: string
+  version: number
+  title: string
+  body: string
+  projectId: string | null
+  authorKind: ActorKind
+  authorLabel: string | null
+  restoredFrom: number | null
+  createdAt: string
+}
+
+export type NoteVersionSummary = Omit<NoteVersion, "id" | "noteId" | "body"> & { bodyLength: number }
+
+export const NOTE_SORTS = ["updated", "title"] as const
+export type NoteSort = (typeof NOTE_SORTS)[number]
+export type NoteOrder = "asc" | "desc"
+
+/** GET /notes filters, as the Notes page's address holds them. */
+export type NoteFilters = {
+  q?: string
+  projectId?: string
+  general?: boolean
+  createdBy?: ActorKind
+  sort?: NoteSort
+  order?: NoteOrder
+}
+
+export type NotePatch = { title?: string; body?: string; projectId?: string | null }
 
 export type StageProposal = {
   id: string
@@ -274,8 +327,23 @@ export type AgentUpdate =
       from: ItemStatus | null
       to: ItemStatus
     }
+  | {
+      kind: "note"
+      at: string
+      noteId: string
+      noteTitle: string
+      actorKind: ActorKind
+      actorLabel: string
+      change: "created" | "updated"
+    }
 
-export type AgentUpdateGroup = { projectId: string | null; projectName: string | null; updates: AgentUpdate[] }
+/** `generalNotes`: the group of notes without a project (the inbox's items are `projectId: null` without it). */
+export type AgentUpdateGroup = {
+  projectId: string | null
+  projectName: string | null
+  generalNotes: boolean
+  updates: AgentUpdate[]
+}
 
 export type MorningProject = {
   id: string

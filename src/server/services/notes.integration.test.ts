@@ -16,6 +16,7 @@ import {
   updateNote,
 } from "./notes.ts"
 import { createProject, deleteProject } from "./projects.ts"
+import { auditLog, morning } from "./reads.ts"
 
 let t: TestDatabase
 
@@ -290,17 +291,19 @@ describe("finding notes", () => {
     const fixed = new Date("2026-11-06T10:00:00.000Z")
     const frozen: Ctx = { ...t.ctx, clock: () => fixed }
     for (const title of ["e", "a", "d", "b", "c"]) await createNote(frozen, owner, { title })
-    for (const sort of ["updated", "title"] as const) {
-      const seen: string[] = []
-      let cursor: string | undefined
-      do {
-        const page = await findNotes(t.ctx, { sort, limit: 2, cursor })
-        seen.push(...page.data.map((n) => n.title))
-        cursor = page.nextCursor ?? undefined
-      } while (cursor)
-      expect([...seen].sort()).toEqual(["a", "b", "c", "d", "e"])
-      if (sort === "title") expect(seen).toEqual(["a", "b", "c", "d", "e"])
-    }
+    for (const sort of ["updated", "title"] as const)
+      for (const order of ["asc", "desc"] as const) {
+        const seen: string[] = []
+        let cursor: string | undefined
+        do {
+          const page = await findNotes(t.ctx, { sort, order, limit: 2, cursor })
+          seen.push(...page.data.map((n) => n.title))
+          cursor = page.nextCursor ?? undefined
+        } while (cursor)
+        expect([...seen].sort()).toEqual(["a", "b", "c", "d", "e"])
+        if (sort === "title")
+          expect(seen).toEqual(order === "asc" ? ["a", "b", "c", "d", "e"] : ["e", "d", "c", "b", "a"])
+      }
   })
 
   it("refuses a cursor from other filters or a broken one", async () => {
@@ -310,6 +313,7 @@ describe("finding notes", () => {
     expect(cursor).not.toBe("")
     await refused("validation_failed", () => findNotes(t.ctx, { limit: 1, cursor, q: "a" }))
     await refused("validation_failed", () => findNotes(t.ctx, { limit: 1, cursor, sort: "title" }))
+    await refused("validation_failed", () => findNotes(t.ctx, { limit: 1, cursor, order: "asc" }))
     await refused("validation_failed", () => findNotes(t.ctx, { cursor: "not-a-cursor" }))
     await refused("validation_failed", () =>
       findNotes(t.ctx, {
@@ -333,5 +337,45 @@ describe("versions", () => {
     expect((await getNoteVersion(t.ctx, note.id, 2)).body).toBe("v2")
     await refused("not_found", () => getNoteVersion(t.ctx, note.id, 6))
     await refused("not_found", () => listNoteVersions(t.ctx, "00000000-0000-4000-8000-000000000000"))
+  })
+})
+
+describe("notes on the overview and in the activity log", () => {
+  it("shows agents' note versions in Agent updates, also after the owner edited the note", async () => {
+    const since = new Date(Date.now() - 1000)
+    const project = await createProject(t.ctx, owner, { name: "Lighthouse" })
+    const inProject = await createNote(t.ctx, agent, { title: "Lamp notes", projectId: project.id })
+    const general = await createNote(t.ctx, owner, { title: "Owner's general note" })
+    await updateNote(t.ctx, agent, general.id, 1, { body: "Agent added" })
+    await updateNote(t.ctx, owner, general.id, 2, { body: "Owner rewrote it" })
+    const view = await morning(t.ctx, { since })
+    const projectGroup = view.agentUpdates.find((g) => g.projectId === project.id)
+    expect(projectGroup?.updates).toEqual([
+      expect.objectContaining({ kind: "note", noteId: inProject.id, change: "created", noteTitle: "Lamp notes" }),
+    ])
+    const notesGroup = view.agentUpdates.find((g) => g.generalNotes)
+    expect(notesGroup).toMatchObject({ projectId: null, projectName: null })
+    expect(notesGroup?.updates).toEqual([
+      expect.objectContaining({ kind: "note", noteId: general.id, change: "updated", actorKind: "agent" }),
+    ])
+    expect(view.agentUpdates.filter((g) => g.projectId === null && !g.generalNotes)).toHaveLength(0)
+  })
+
+  it("counts a note's rows under the project it is in now, in the list and the facet alike", async () => {
+    const first = await createProject(t.ctx, owner, { name: "First" })
+    const second = await createProject(t.ctx, owner, { name: "Second" })
+    const note = await createNote(t.ctx, agent, { title: "Moving", projectId: first.id })
+    await updateNote(t.ctx, agent, note.id, 1, { body: "Edited" })
+    const listed = async (projectId: string) =>
+      (await auditLog(t.ctx, { projectId })).data.filter((row) => row.entityType === "note").length
+    const facet = async (projectId: string) =>
+      (await auditLog(t.ctx, {})).counts?.projects.find((p) => p.projectId === projectId)?.count ?? 0
+    expect(await listed(first.id)).toBe(2)
+    expect(await facet(first.id)).toBe(1 + 2) // the project's own create row and the note's two rows
+    await updateNote(t.ctx, owner, note.id, 2, { projectId: second.id })
+    expect(await listed(first.id)).toBe(0)
+    expect(await listed(second.id)).toBe(3)
+    expect(await facet(second.id)).toBe(1 + 3)
+    expect(await facet(first.id)).toBe(1)
   })
 })

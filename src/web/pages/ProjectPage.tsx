@@ -26,6 +26,7 @@ import { Time } from "../ui/Time.tsx"
 import { showToast } from "../ui/Toast.tsx"
 import { Progress, StageTag, Tag } from "../ui/tags.tsx"
 import { issuesUrl } from "./MorningPage.tsx"
+import { ProjectNotes } from "./NotesPage.tsx"
 import { ItemRow, Panel } from "./parts.tsx"
 
 const OPEN_ORDER: ItemStatus[] = ["waiting_on_you", "in_progress", "todo", "future"]
@@ -179,6 +180,8 @@ function ProjectBody({ detail, refreshFailed }: { detail: ProjectDetail; refresh
           })}
           {closedItems.length ? <ClosedFold items={closedItems} /> : null}
         </Panel>
+
+        <ProjectNotes projectId={project.id} />
 
         <SecuritySourcesPanel sources={detail.securitySources} />
         <DeletePanel project={project} items={detail.items.length} openItems={openItems.length} />
