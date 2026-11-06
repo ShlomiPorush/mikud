@@ -3,10 +3,10 @@ import { and, asc, desc, eq, ilike, isNull, lt, or, type SQL, sql } from "drizzl
 import { LIMITS } from "../../shared/api.ts"
 import type { ActorKind } from "../../shared/enums.ts"
 import { plainExcerpt } from "../../shared/excerpt.ts"
-import { notes, noteVersions, projects } from "../db/schema.ts"
+import { items, notes, noteVersions, projects, telegramUpdates } from "../db/schema.ts"
 import { AppError, invalid, notFound } from "../errors.ts"
 import { type By, type Ctx, checkAgentText, type DbOrTx, inTx, requireOwner, type Tx, writeAudit } from "./context.ts"
-import { cleanTitle } from "./items.ts"
+import { addCommentTx, cleanTitle, updateItemTx } from "./items.ts"
 import { decodeCursor, encodeCursor, type Page } from "./reads.ts"
 
 // Notes (requirements section 10): knowledge the owner and agents keep. Every change writes a row in
@@ -410,4 +410,51 @@ export async function getNoteVersion(ctx: Ctx, noteId: string, version: number):
     .where(and(eq(noteVersions.noteId, noteId), eq(noteVersions.version, version)))
   if (!row) throw notFound("The version")
   return row
+}
+
+// --- The Telegram button: an inbox capture becomes a note ---
+
+export type MoveToNote =
+  | { kind: "moved"; note: NoteRow }
+  /** The capture became a note before (a second press, or a press on a redelivered message). */
+  | { kind: "already" }
+  /** The item was changed, moved, closed or deleted since it was captured: nothing is moved. */
+  | { kind: "changed" }
+  /** No capture of the bot has this number: a forged or an old button. */
+  | { kind: "unknown" }
+
+/**
+ * Moves the text of the item a Telegram capture created into a new general note, and closes the item as
+ * not_relevant with a comment that points to the note (owner's decision, 2026-11-06; the bot never deletes).
+ * The capture is named by its own update_id, which the server stored with the item: a button can only move
+ * the item its message reported. Only an item still as captured moves (in the inbox, future, version 1). The
+ * caller holds a transaction that took the link structure lock first (inLinkTx), like an item delete, so the
+ * two never wait on each other's rows. Everything here commits or rolls back together.
+ */
+export async function moveCaptureToNoteTx(
+  ctx: Ctx,
+  tx: Tx,
+  by: By,
+  captureUpdateId: number,
+  comment: string,
+): Promise<MoveToNote> {
+  const [capture] = await tx
+    .select()
+    .from(telegramUpdates)
+    .where(eq(telegramUpdates.updateId, captureUpdateId))
+    .for("update")
+  if (capture?.outcome !== "item_created") return { kind: "unknown" }
+  if (capture.noteId) return { kind: "already" }
+  if (!capture.itemId) return { kind: "changed" }
+  const [item] = await tx.select().from(items).where(eq(items.id, capture.itemId)).for("update")
+  if (!item || item.projectId !== null || item.status !== "future" || item.version !== 1) return { kind: "changed" }
+
+  // A capture of several lines keeps the whole text as its body, the first line again included.
+  const lines = item.body.split(/\r?\n/)
+  const body = item.body && lines[0]?.trim() === item.title ? lines.slice(1).join("\n").trim() : item.body
+  const note = await createNoteTx(ctx, tx, by, { title: item.title, body })
+  await updateItemTx(ctx, tx, by, item.id, item.version, { status: "not_relevant" })
+  await addCommentTx(ctx, tx, by, item.id, { text: comment, noteId: note.id })
+  await tx.update(telegramUpdates).set({ noteId: note.id }).where(eq(telegramUpdates.updateId, captureUpdateId))
+  return { kind: "moved", note }
 }

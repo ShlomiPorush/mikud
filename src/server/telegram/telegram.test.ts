@@ -99,7 +99,7 @@ describe("BotApi", () => {
       },
       {
         url: `https://api.example.org/bot${TOKEN}/getUpdates`,
-        body: { offset: 12, timeout: 50, allowed_updates: ["message"] },
+        body: { offset: 12, timeout: 50, allowed_updates: ["message", "callback_query"] },
       },
     ])
   })

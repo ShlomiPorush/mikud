@@ -1,10 +1,13 @@
 import { eq } from "drizzle-orm"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import en from "../../shared/locales/en.json"
 import he from "../../shared/locales/he.json"
 import { createApp } from "../app.ts"
-import { audit, items, jobRuns, telegramUpdates } from "../db/schema.ts"
+import { audit, comments, items, jobRuns, notes, telegramUpdates } from "../db/schema.ts"
 import { updateSettings } from "../services/admin.ts"
 import type { Ctx } from "../services/context.ts"
+import { deleteItem, updateItem } from "../services/items.ts"
+import type { ReloadableSecretScanner } from "../services/secrets.ts"
 import { createAgentKey, ownerBrowser, testCore } from "../testing/app.ts"
 import { StandInBotApi, waitFor } from "../testing/bot-api.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
@@ -101,6 +104,7 @@ describe("Telegram bot", () => {
       text: `Saved under Inbox: Try a darker theme <a href="http://127.0.0.1:8090/items/${item?.id}">Open</a>`,
       parseMode: "HTML",
       linkPreview: { is_disabled: true },
+      replyMarkup: { inline_keyboard: [[{ text: en.telegram.toNote, callback_data: "note:100" }]] },
     })
     await waitFor(confirmed(100))
     expect(bot?.polling).toBe(true)
@@ -247,5 +251,169 @@ describe("Telegram bot", () => {
     expect(all).not.toContain(TOKEN.split(":")[1])
     for (const words of ["darker theme", "Let me in", "deploy key", "After the errors", "Survives"])
       expect(all).not.toContain(words)
+  })
+})
+
+describe("Make it a note", () => {
+  const CHAT = { id: Number(OWNER_CHAT), type: "private" }
+  /** A press on the button under the bot's reply to a capture. */
+  const press = (updateId: number, data: string, from = OWNER_CHAT, messageId = 1): TelegramUpdate => ({
+    update_id: updateId,
+    callback_query: {
+      id: `press-${updateId}`,
+      from: { id: Number(from), is_bot: false },
+      message: { message_id: messageId, date: 0, chat: { ...CHAT, id: Number(from) } },
+      data,
+    },
+  })
+  const options = { chatId: OWNER_CHAT, publicUrl: PUBLIC_URL }
+  const capture = (updateId: number, body: string) => handleUpdate(t.ctx, options, text(updateId, body))
+  const allNotes = () => t.ctx.db.select().from(notes)
+  const captureRow = async (updateId: number) =>
+    (await t.ctx.db.select().from(telegramUpdates).where(eq(telegramUpdates.updateId, updateId)))[0]
+
+  it("puts the button under a capture's reply, naming that capture", async () => {
+    startBot()
+    standIn.push(text(1000, "Ask the vendor about the warranty"))
+    await waitFor(() => standIn.sent.length === 1)
+    expect(standIn.sent[0]?.replyMarkup).toEqual({
+      inline_keyboard: [[{ text: "Make it a note", callback_data: "note:1000" }]],
+    })
+    const [item] = await allItems()
+    expect(await captureRow(1000)).toMatchObject({ outcome: "item_created", itemId: item?.id, noteId: null })
+  })
+
+  it("moves the capture into a general note, closes the item with a comment that links it, all at once", async () => {
+    await capture(1100, "Warranty\nThe vendor covers two years.")
+    startBot()
+    standIn.push(press(1101, "note:1100", OWNER_CHAT, 7))
+    await waitFor(() => standIn.sent.length === 1 && standIn.buttonsRemoved.length === 1)
+
+    const [note] = await allNotes()
+    expect(note).toMatchObject({
+      projectId: null,
+      title: "Warranty",
+      body: "The vendor covers two years.",
+      createdBy: "bot",
+      version: 1,
+    })
+    const [item] = await allItems()
+    expect(item).toMatchObject({ status: "not_relevant", version: 2, statusSetBy: "bot" })
+    const [comment] = await t.ctx.db.select().from(comments)
+    expect(comment).toMatchObject({
+      itemId: item?.id,
+      noteId: note?.id,
+      authorKind: "bot",
+      text: en.telegram.movedComment,
+    })
+    expect(await captureRow(1100)).toMatchObject({ noteId: note?.id })
+    expect(await outcome(1101)).toBe("note_created")
+    const actions = (await t.ctx.db.select().from(audit)).map((row) => row.action)
+    expect(actions).toEqual(expect.arrayContaining(["note.create", "item.update", "comment.create"]))
+    expect(standIn.pressAnswers).toEqual([{ callbackQueryId: "press-1101", text: "Saved as a general note: Warranty" }])
+    expect(standIn.buttonsRemoved).toEqual([{ chatId: OWNER_CHAT, messageId: 7 }])
+    expect(standIn.sent[0]?.text).toBe(
+      `Saved as a general note: Warranty <a href="http://127.0.0.1:8090/notes/${note?.id}">Open</a>`,
+    )
+  })
+
+  it("moves once: a second press, two presses at once, and a redelivered press make one note", async () => {
+    await capture(1200, "One note only")
+    const results = await Promise.all([
+      handleUpdate(t.ctx, options, press(1201, "note:1200")),
+      handleUpdate(t.ctx, options, press(1202, "note:1200")),
+    ])
+    expect(results.map((r) => !r.duplicate && r.outcome).sort()).toEqual(["ignored", "note_created"])
+    const again = await handleUpdate(t.ctx, options, press(1203, "note:1200"))
+    expect(again).toMatchObject({ outcome: "ignored", press: { text: en.telegram.alreadyNote, removeButton: true } })
+    expect(await handleUpdate(t.ctx, options, press(1203, "note:1200"))).toEqual({ duplicate: true })
+    expect(await allNotes()).toHaveLength(1)
+    expect(await t.ctx.db.select().from(comments)).toHaveLength(1)
+  })
+
+  it("leaves an item the owner changed since the capture, and answers why", async () => {
+    await capture(1300, "Paint the fence")
+    const [item] = await allItems()
+    await updateItem(t.ctx, owner, item?.id ?? "", 1, { projectId: null, title: "Paint the fence white" })
+    const result = await handleUpdate(t.ctx, options, press(1301, "note:1300"))
+    expect(result).toMatchObject({ outcome: "refused", press: { text: en.telegram.itemChanged, removeButton: true } })
+    expect(await allNotes()).toHaveLength(0)
+    expect((await allItems())[0]).toMatchObject({ status: "future", version: 2 })
+  })
+
+  it("moves nothing for a forged or malformed button, or one that names no capture", async () => {
+    await capture(1400, "A real capture")
+    for (const [id, data] of [
+      [1401, "note:999999"],
+      [1402, "note:1400; drop table notes"],
+      [1403, "item:1400"],
+      [1404, ""],
+    ] as const) {
+      const result = await handleUpdate(t.ctx, options, press(id, data))
+      expect(result).toMatchObject({
+        outcome: "refused",
+        press: { text: en.telegram.noteUnknown, removeButton: false },
+      })
+    }
+    // A press on a message that was no capture (the bot's answer to a command) names no capture either.
+    await handleUpdate(t.ctx, options, text(1405, "/help"))
+    expect(await handleUpdate(t.ctx, options, press(1406, "note:1405"))).toMatchObject({ outcome: "refused" })
+    expect(await allNotes()).toHaveLength(0)
+    expect((await allItems())[0]).toMatchObject({ status: "future", version: 1 })
+  })
+
+  it("ignores a press from another chat or a bot without answering", async () => {
+    await capture(1500, "Mine")
+    const stranger = await handleUpdate(t.ctx, options, press(1501, "note:1500", "9999"))
+    expect(stranger).toMatchObject({ outcome: "ignored", reply: null })
+    expect(stranger).not.toHaveProperty("press")
+    const fromBot = press(1502, "note:1500")
+    if (fromBot.callback_query) fromBot.callback_query.from.is_bot = true
+    expect(await handleUpdate(t.ctx, options, fromBot)).not.toHaveProperty("press")
+    expect(await allNotes()).toHaveLength(0)
+  })
+
+  it("keeps the move when Telegram fails to take the answer or the button off", async () => {
+    await capture(1600, "Answer may fail")
+    standIn.pressFailures.push(400)
+    standIn.removeFailures.push("drop")
+    startBot()
+    standIn.push(press(1601, "note:1600"))
+    await waitFor(confirmed(1601))
+    await waitFor(() => standIn.sent.length === 1)
+    expect(await allNotes()).toHaveLength(1)
+    expect(await outcome(1601)).toBe("note_created")
+    expect(standIn.unconfirmed()).toEqual([])
+  })
+
+  it("refuses to move text that now looks like a secret, and changes nothing", async () => {
+    // The private domains changed after the capture: the move checks the text again.
+    await capture(1700, "Ask ops at build.corp.example")
+    ;(t.ctx.secrets as ReloadableSecretScanner).setPrivateDomains(["corp.example"])
+    const result = await handleUpdate(t.ctx, options, press(1701, "note:1700"))
+    expect(result).toMatchObject({ outcome: "refused", press: { text: en.telegram.refusedSecretNote } })
+    expect(await allNotes()).toHaveLength(0)
+    expect((await allItems())[0]).toMatchObject({ status: "future", version: 1 })
+    expect(await t.ctx.db.select().from(comments)).toHaveLength(0)
+    ;(t.ctx.secrets as ReloadableSecretScanner).setPrivateDomains([])
+  })
+
+  it("never deadlocks with an item delete of the same item, in either order (P15)", async () => {
+    for (const [captureId, first] of [
+      [1800, "press"],
+      [1810, "delete"],
+    ] as const) {
+      await capture(captureId, `Race ${captureId}`)
+      const item = (await allItems()).find((row) => row.title === `Race ${captureId}`)
+      const pressing = () => handleUpdate(t.ctx, options, press(captureId + 1, `note:${captureId}`))
+      const deleting = () => deleteItem(t.ctx, owner, item?.id ?? "")
+      const results = await Promise.allSettled(first === "press" ? [pressing(), deleting()] : [deleting(), pressing()])
+      for (const result of results) expect(result.status).toBe("fulfilled")
+      expect((await allItems()).find((row) => row.id === item?.id)).toBeUndefined()
+      const moved = await captureRow(captureId)
+      const noteCount = (await allNotes()).filter((note) => note.title === `Race ${captureId}`).length
+      // Either the press came first (a note, its item deleted after) or the delete did (no note).
+      expect(noteCount).toBe(moved?.noteId ? 1 : 0)
+    }
   })
 })

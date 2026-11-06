@@ -888,6 +888,13 @@
     "open": "Open",
     "refusedSecret": "Nothing was saved: the text looks like it holds a secret (a password, token, key or server address). Remove it and send it again.",
     "onlyText": "I save text messages only. Nothing was saved.",
+    "toNote": "Make it a note",
+    "movedToNote": "Saved as a general note: {title}",
+    "movedComment": "Moved into a general note from Telegram.",
+    "alreadyNote": "This is a note already.",
+    "itemChanged": "The item changed in Mikud since then, so it stays an item. Open it in Mikud.",
+    "noteUnknown": "This button no longer works. Nothing was changed.",
+    "refusedSecretNote": "Not moved: the text looks like it holds a secret. Remove it in Mikud first.",
     "signInCode": "Your Mikud sign-in code: {code}\nIt works once, for a few minutes. If you are not signing in right now, change your password in Mikud.",
     "morning": {
       "allClear": "Nothing is waiting on you today.",

@@ -260,32 +260,38 @@ export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number)
   })
 }
 
-export async function addComment(
-  ctx: Ctx,
-  by: By,
-  itemId: string,
-  input: { text: string; threadId?: string | null },
-): Promise<CommentRow> {
+export type CommentInput = {
+  text: string
+  threadId?: string | null
+  /** The note the comment points to (the Telegram bot moved the item's text into it). */
+  noteId?: string | null
+}
+
+export async function addComment(ctx: Ctx, by: By, itemId: string, input: CommentInput): Promise<CommentRow> {
+  return inTx(ctx, (tx) => addCommentTx(ctx, tx, by, itemId, input))
+}
+
+/** Adds a comment inside a transaction the caller holds, so it commits or rolls back with the caller's change. */
+export async function addCommentTx(ctx: Ctx, tx: Tx, by: By, itemId: string, input: CommentInput): Promise<CommentRow> {
   const text = input.text.trim()
   if (!text) throw invalid("The comment is empty.")
   checkAgentText(ctx, by, { comment: text })
-  return inTx(ctx, async (tx) => {
-    await getItemRow(tx, itemId)
-    const [row] = await tx
-      .insert(comments)
-      .values({
-        itemId,
-        authorKind: by.actor.kind,
-        authorLabel: by.actor.label,
-        text,
-        threadId: input.threadId ?? null,
-        createdAt: ctx.clock(),
-      })
-      .returning()
-    if (!row) throw new Error("insert returned no row")
-    await writeAudit(ctx, tx, by, { action: "comment.create", entityType: "item", entityId: itemId, after: row })
-    return row
-  })
+  await getItemRow(tx, itemId)
+  const [row] = await tx
+    .insert(comments)
+    .values({
+      itemId,
+      authorKind: by.actor.kind,
+      authorLabel: by.actor.label,
+      text,
+      threadId: input.threadId ?? null,
+      noteId: input.noteId ?? null,
+      createdAt: ctx.clock(),
+    })
+    .returning()
+  if (!row) throw new Error("insert returned no row")
+  await writeAudit(ctx, tx, by, { action: "comment.create", entityType: "item", entityId: itemId, after: row })
+  return row
 }
 
 export type LinkThreadInput = {

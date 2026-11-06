@@ -3,6 +3,7 @@
 export const UI_ROUTES = {
   home: "/",
   item: (id: string) => `/items/${encodeURIComponent(id)}`,
+  note: (id: string) => `/notes/${encodeURIComponent(id)}`,
 } as const
 
 /** An absolute link under the public URL, keeping any path prefix it has. */

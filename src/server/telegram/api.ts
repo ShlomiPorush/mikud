@@ -45,7 +45,18 @@ export type TelegramMessage = {
   text?: string
 }
 
-export type TelegramUpdate = { update_id: number; message?: TelegramMessage }
+/** A press on a button under one of the bot's messages. `data` is what the bot put on the button. */
+export type TelegramCallbackQuery = {
+  id: string
+  from: { id: number; is_bot: boolean }
+  message?: TelegramMessage
+  data?: string
+}
+
+export type TelegramUpdate = { update_id: number; message?: TelegramMessage; callback_query?: TelegramCallbackQuery }
+
+/** Buttons under a message: rows of buttons, each with the data its press sends back (at most 64 bytes). */
+export type InlineKeyboard = { inline_keyboard: { text: string; callback_data: string }[][] }
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
 
@@ -104,23 +115,58 @@ export class BotApi {
     return json.result as T
   }
 
-  /** Long poll: waits up to `timeoutSeconds` for updates after `offset`; only `message` updates. */
+  /** Long poll: waits up to `timeoutSeconds` for updates after `offset`: messages and button presses. */
   getUpdates(offset: number | undefined, timeoutSeconds: number, signal?: AbortSignal): Promise<TelegramUpdate[]> {
     return this.call<TelegramUpdate[]>(
       "getUpdates",
-      { ...(offset !== undefined ? { offset } : {}), timeout: timeoutSeconds, allowed_updates: ["message"] },
+      {
+        ...(offset !== undefined ? { offset } : {}),
+        timeout: timeoutSeconds,
+        allowed_updates: ["message", "callback_query"],
+      },
       (timeoutSeconds + 15) * 1000,
       signal,
     )
   }
 
-  async sendMessage(chatId: string, text: TelegramHtml, signal?: AbortSignal): Promise<number> {
+  async sendMessage(
+    chatId: string,
+    text: TelegramHtml,
+    signal?: AbortSignal,
+    replyMarkup?: InlineKeyboard,
+  ): Promise<number> {
     const result = await this.call<{ message_id: number }>(
       "sendMessage",
-      { chat_id: chatId, text: String(text), parse_mode: "HTML", link_preview_options: { is_disabled: true } },
+      {
+        chat_id: chatId,
+        text: String(text),
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      },
       20_000,
       signal,
     )
     return result.message_id
+  }
+
+  /** Ends the press's loading state in the owner's app, with a short note it shows (plain text, up to 200). */
+  async answerCallbackQuery(callbackQueryId: string, text: string, signal?: AbortSignal): Promise<void> {
+    await this.call<boolean>(
+      "answerCallbackQuery",
+      { callback_query_id: callbackQueryId, text: text.slice(0, 200) },
+      20_000,
+      signal,
+    )
+  }
+
+  /** Takes the buttons off one of the bot's messages. */
+  async removeButtons(chatId: string, messageId: number, signal?: AbortSignal): Promise<void> {
+    await this.call<unknown>(
+      "editMessageReplyMarkup",
+      { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } },
+      20_000,
+      signal,
+    )
   }
 }

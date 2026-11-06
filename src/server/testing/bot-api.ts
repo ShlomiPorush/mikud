@@ -2,14 +2,22 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from "node:net"
 import type { TelegramUpdate } from "../telegram/api.ts"
 
-export type SentMessage = { chatId: string; text: string; parseMode: string | undefined; linkPreview: unknown }
+export type SentMessage = {
+  chatId: string
+  text: string
+  parseMode: string | undefined
+  linkPreview: unknown
+  /** The buttons under the message, as sent. */
+  replyMarkup?: { inline_keyboard: { text: string; callback_data: string }[][] }
+}
 
 /** How the stand-in answers the next sendMessage: an error status, or a dropped connection (no answer). */
 export type SendFailure = number | "drop"
 
 /**
  * A stand-in for the Telegram Bot API on 127.0.0.1, for tests. It serves `getUpdates` (long polling, with
- * Telegram's offset semantics: an offset confirms every update below it) and `sendMessage` (recorded).
+ * Telegram's offset semantics: an offset confirms every update below it), and records `sendMessage`,
+ * `answerCallbackQuery` and `editMessageReplyMarkup`; each of the three can be made to fail.
  * Requests with another token answer 401 like Telegram.
  */
 export class StandInBotApi {
@@ -21,6 +29,13 @@ export class StandInBotApi {
   readonly sendFailures: SendFailure[] = []
   /** Error statuses for the next getUpdates calls, used up in order. */
   readonly pollFailures: number[] = []
+  /** Answers to button presses, in order. */
+  readonly pressAnswers: { callbackQueryId: string; text: string }[] = []
+  /** Messages whose buttons were taken off, in order. */
+  readonly buttonsRemoved: { chatId: string; messageId: number }[] = []
+  /** Answers for the next answerCallbackQuery and editMessageReplyMarkup calls, used up in order. */
+  readonly pressFailures: SendFailure[] = []
+  readonly removeFailures: SendFailure[] = []
   private pending: TelegramUpdate[] = []
   private waiters = new Set<() => void>()
   private readonly sockets = new Set<Socket>()
@@ -61,6 +76,10 @@ export class StandInBotApi {
     this.offsets.length = 0
     this.sendFailures.length = 0
     this.pollFailures.length = 0
+    this.pressAnswers.length = 0
+    this.buttonsRemoved.length = 0
+    this.pressFailures.length = 0
+    this.removeFailures.length = 0
     this.pending = []
   }
 
@@ -93,8 +112,20 @@ export class StandInBotApi {
         text: String(body.text),
         parseMode: body.parse_mode,
         linkPreview: body.link_preview_options,
+        ...(body.reply_markup ? { replyMarkup: body.reply_markup } : {}),
       })
       return answer(200, { ok: true, result: { message_id: this.sent.length } })
+    }
+
+    if (match[2] === "answerCallbackQuery" || match[2] === "editMessageReplyMarkup") {
+      const press = match[2] === "answerCallbackQuery"
+      const failure = (press ? this.pressFailures : this.removeFailures).shift()
+      if (failure === "drop") return req.socket.destroy()
+      if (failure !== undefined)
+        return answer(failure, { ok: false, error_code: failure, description: "stand-in failure" })
+      if (press) this.pressAnswers.push({ callbackQueryId: String(body.callback_query_id), text: String(body.text) })
+      else this.buttonsRemoved.push({ chatId: String(body.chat_id), messageId: Number(body.message_id) })
+      return answer(200, { ok: true, result: true })
     }
 
     if (match[2] === "getUpdates") {
