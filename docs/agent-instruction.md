@@ -33,6 +33,12 @@ It sets the item to `in_progress`. Remember the item id it returns.
 
 **Quick capture.** When the user asks to note something for later ("note an idea for X"), call `mikud_capture` with the text and, if named, the project. Without a project it goes to the inbox.
 
+**Notes.** A note keeps knowledge worth finding again; an item is work to do. Write a note when the user asks you to remember or write something down, or when the work settled something that will matter later: a decision and its reason, how a part works, a finding, a useful link.
+- First look with `mikud_find_notes` (by text, and by project when there is one). When a note on the subject exists, read it with `mikud_get_note` and update it with `mikud_update_note`, sending the whole new body; do not write a second note on the same subject.
+- Otherwise call `mikud_create_note` with a short title and a Markdown body, in the conversation's language, with the project when the knowledge belongs to one.
+- The owner's notes may be edited, and every change is kept as a version he can restore. Change only what the work changed; keep the rest of the text as it is.
+- On `version_conflict`, read the note again, merge your change into the new text, and retry once.
+
 **Never:**
 - Write secrets or environment details into Mikud: no tokens, passwords, keys, host names, IP addresses or server details. If Mikud refuses text with `secret_suspected`, rewrite it without the detail.
 - Delete anything. There is no tool for it; deleting belongs to the owner.

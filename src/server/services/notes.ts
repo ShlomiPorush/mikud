@@ -239,6 +239,19 @@ export async function getNoteRow(db: DbOrTx, id: string): Promise<NoteRow> {
 
 // --- Reads ---
 
+export type NoteDetail = { note: NoteRow; project: { id: string; name: string } | null }
+
+/** One note with its body and the name of its project. */
+export async function noteDetail(ctx: Ctx, id: string): Promise<NoteDetail> {
+  const note = await getNoteRow(ctx.db, id)
+  if (!note.projectId) return { note, project: null }
+  const [project] = await ctx.db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(eq(projects.id, note.projectId))
+  return { note, project: project ?? null }
+}
+
 export const NOTE_SORTS = ["updated", "title"] as const
 export type NoteSort = (typeof NOTE_SORTS)[number]
 

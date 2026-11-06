@@ -4,6 +4,7 @@ import { Hono } from "hono"
 import { z } from "zod"
 import { LIMITS } from "../../shared/api.ts"
 import {
+  actorKindSchema,
   ITEM_STATUSES,
   itemStatusSchema,
   itemTypeSchema,
@@ -15,6 +16,7 @@ import { AppError, errorBody } from "../errors.ts"
 import { type AuthDeps, authenticate, type Env } from "../http/auth.ts"
 import type { By, Ctx } from "../services/context.ts"
 import { addComment, captureItem, createItem, linkThread, updateItem } from "../services/items.ts"
+import { createNote, findNotes, NOTE_SORTS, noteDetail, updateNote } from "../services/notes.ts"
 import { proposeStage, updateProject } from "../services/projects.ts"
 import { findItems, itemDetail, listProjects } from "../services/reads.ts"
 import { startThread } from "../services/threads.ts"
@@ -25,6 +27,7 @@ At thread start call mikud_start_thread once. At the end leave one short summary
 Statuses: ${ITEM_STATUSES.join(", ")}. Use waiting_on_you only when the owner must act (a decision, a manual test, a merge approval).
 Never write secrets or server details: no tokens, passwords, keys, host names or IP addresses. Such text is refused with secret_suspected.
 You cannot delete items or projects, and you cannot change a stage: propose one with mikud_propose_stage.
+Notes keep knowledge worth finding again (decisions, explanations, findings, how things work): find one with mikud_find_notes before you write, and update it rather than writing a second one. Work to do is an item, not a note. You cannot delete notes.
 Subagent and review threads (those with a parent thread) must not call Mikud.`
 
 const id = z.uuid()
@@ -142,10 +145,56 @@ export function buildMcpServer(ctx: Ctx, by: By, version: string): McpServer {
   )
   tool(
     "mikud_capture",
-    'Quick note of an idea for later ("note an idea for project X"): an idea item with status future, in the project or else in the inbox. The first line becomes the title.',
+    'Quick capture of an idea for later ("note an idea for project X"): an idea item with status future, in the project or else in the inbox. The first line becomes the title. Knowledge to keep goes in a note (mikud_create_note), not here.',
     { text: z.string().max(LIMITS.body), projectId: id.optional() },
     false,
     (a) => captureItem(ctx, by, a as never),
+  )
+  tool(
+    "mikud_find_notes",
+    "Search notes by text in title and body, by project (projectId), only notes without a project (general), or by who created them (createdBy: owner, agent, bot). sort: updated (newest change first, the default) or title. Returns summaries with id, version and the start of the body, and nextCursor for the next page (pass it back with the same filters).",
+    {
+      query: z.string().max(200).optional(),
+      projectId: id.optional(),
+      general: z.boolean().optional(),
+      createdBy: actorKindSchema.optional(),
+      sort: z.enum(NOTE_SORTS).optional(),
+      cursor: z.string().max(LIMITS.noteCursor).optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+    },
+    true,
+    (a) => findNotes(ctx, { ...a, q: a.query }),
+  )
+  tool(
+    "mikud_get_note",
+    "One note with its whole Markdown body, its version and its project. Read it before mikud_update_note: the update needs its current version.",
+    { noteId: id },
+    true,
+    (a) => noteDetail(ctx, a.noteId),
+  )
+  tool(
+    "mikud_create_note",
+    `Create a note: knowledge worth finding again. body is Markdown (up to ${LIMITS.noteBody} characters). Without projectId it is a general note. Look for an existing note with mikud_find_notes first.`,
+    {
+      title: z.string().max(LIMITS.noteTitle),
+      body: z.string().max(LIMITS.noteBody).optional(),
+      projectId: id.optional(),
+    },
+    false,
+    (a) => createNote(ctx, by, a as never),
+  )
+  tool(
+    "mikud_update_note",
+    "Change a note, the owner's included: send the whole new title or body, not a diff. version is the version you read (mikud_get_note); a stale one is refused with version_conflict: read again, merge, retry. Every change is kept as a version the owner can restore. projectId moves the note (null: a general note). You cannot delete notes.",
+    {
+      noteId: id,
+      version: z.number().int().min(1),
+      title: z.string().max(LIMITS.noteTitle).optional(),
+      body: z.string().max(LIMITS.noteBody).optional(),
+      projectId: id.nullable().optional(),
+    },
+    false,
+    ({ noteId, version, ...patch }) => updateNote(ctx, by, noteId, version, patch),
   )
   tool(
     "mikud_link_thread",

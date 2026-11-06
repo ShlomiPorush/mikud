@@ -65,13 +65,17 @@ describe("MCP over Streamable HTTP", () => {
       "mikud_capture",
       "mikud_comment",
       "mikud_create_item",
+      "mikud_create_note",
       "mikud_find_items",
+      "mikud_find_notes",
       "mikud_get_item",
+      "mikud_get_note",
       "mikud_link_thread",
       "mikud_list_projects",
       "mikud_propose_stage",
       "mikud_start_thread",
       "mikud_update_item",
+      "mikud_update_note",
       "mikud_update_project",
     ])
     expect(tools.some((tool) => /delete|remove/i.test(tool.name))).toBe(false)
@@ -79,6 +83,9 @@ describe("MCP over Streamable HTTP", () => {
     const withStage = tools.filter((tool) => Object.keys(tool.inputSchema.properties ?? {}).includes("stage"))
     expect(withStage.map((tool) => tool.name)).toEqual(["mikud_propose_stage"])
     expect(client.getInstructions()).toContain("waiting_on_you")
+    expect(client.getInstructions()).toContain("mikud_find_notes")
+    // No tool restores a version of a note either: that is the owner's.
+    expect(tools.some((tool) => /restore/i.test(tool.name))).toBe(false)
     await client.close()
   })
 
@@ -166,5 +173,53 @@ describe("MCP over Streamable HTTP", () => {
     const withCookie = await fetch(`${base}/mcp`, { ...init, headers: { ...init.headers, cookie: "mikud_device=x" } })
     expect(withCookie.status).toBe(401)
     await expect(connect("not-the-token")).rejects.toThrow()
+  })
+
+  it("creates, finds, reads and updates a note, and refuses a stale version and a secret", async () => {
+    const client = await connect(AGENT)
+    const created = await callTool(client, "mikud_create_note", {
+      title: "How backups run",
+      body: "Nightly, by the owner's tools.",
+    })
+    expect(created.isError).toBe(false)
+    expect(created.body.data).toMatchObject({
+      title: "How backups run",
+      version: 1,
+      createdBy: "agent",
+      projectId: null,
+    })
+    const noteId = created.body.data.id
+    const found = await callTool(client, "mikud_find_notes", { query: "backups" })
+    expect(found.body.data.data.map((n: { id: string }) => n.id)).toEqual([noteId])
+    expect(found.body.data.data[0]).not.toHaveProperty("body")
+    const read = await callTool(client, "mikud_get_note", { noteId })
+    expect(read.body.data).toMatchObject({
+      note: { id: noteId, body: "Nightly, by the owner's tools." },
+      project: null,
+    })
+    const updated = await callTool(client, "mikud_update_note", { noteId, version: 1, body: "Nightly." })
+    expect(updated.body.data).toMatchObject({ version: 2, body: "Nightly." })
+    const stale = await callTool(client, "mikud_update_note", { noteId, version: 1, body: "Late" })
+    expect(stale).toMatchObject({ isError: true, body: { error: { code: "version_conflict", currentVersion: 2 } } })
+    const secret = await callTool(client, "mikud_update_note", {
+      noteId,
+      version: 2,
+      body: `${"gh"}p_${"A1b2C3d4E5".repeat(4)}`,
+    })
+    expect(secret).toMatchObject({ isError: true, body: { error: { code: "secret_suspected" } } })
+    expect(secret.text).not.toContain("A1b2C3d4E5")
+    await client.close()
+  })
+
+  it("files a note in a project and lists only that project's notes", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Lighthouse" })
+    const client = await connect(AGENT)
+    await callTool(client, "mikud_create_note", { title: "In the project", projectId: project.id })
+    await callTool(client, "mikud_create_note", { title: "General" })
+    const inProject = await callTool(client, "mikud_find_notes", { projectId: project.id })
+    expect(inProject.body.data.data.map((n: { title: string }) => n.title)).toEqual(["In the project"])
+    const general = await callTool(client, "mikud_find_notes", { general: true })
+    expect(general.body.data.data.map((n: { title: string }) => n.title)).toEqual(["General"])
+    await client.close()
   })
 })

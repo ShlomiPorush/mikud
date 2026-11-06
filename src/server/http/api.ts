@@ -6,20 +6,24 @@ import {
   captureBody,
   commentBody,
   createItemBody,
+  createNoteBody,
   createProjectBody,
   decideProposalBody,
+  LIMITS,
   linkThreadBody,
   morningQuery,
   proposeStageBody,
+  restoreNoteBody,
   securitySnapshotBody,
   settingsBody,
   startThreadBody,
   t3SnapshotBody,
   updateItemBody,
+  updateNoteBody,
   updateProjectBody,
   visitBody,
 } from "../../shared/api.ts"
-import { itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
+import { actorKindSchema, itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
 import { forbidden, invalid, notFound } from "../errors.ts"
 import { sendTestMorningMessage } from "../jobs/morning.ts"
 import {
@@ -34,6 +38,17 @@ import {
   updateSettings,
 } from "../services/admin.ts"
 import { addComment, captureItem, createItem, deleteItem, linkThread, updateItem } from "../services/items.ts"
+import {
+  createNote,
+  deleteNote,
+  findNotes,
+  getNoteVersion,
+  listNoteVersions,
+  NOTE_SORTS,
+  noteDetail,
+  restoreNote,
+  updateNote,
+} from "../services/notes.ts"
 import { createProject, decideProposal, deleteProject, proposeStage, updateProject } from "../services/projects.ts"
 import {
   archive,
@@ -117,6 +132,25 @@ const auditQuery = auditFilterSchema.extend({
   entityId: z.string().max(200).optional(),
 })
 const versionQuery = z.object({ version: z.coerce.number().int().min(1).optional() })
+const findNotesQuery = z.object({
+  q: z.string().max(200).optional(),
+  projectId: z.uuid().optional(),
+  general: bool.optional(),
+  createdBy: actorKindSchema.optional(),
+  sort: z.enum(NOTE_SORTS).optional(),
+  cursor: z.string().max(LIMITS.noteCursor).optional(),
+  limit,
+})
+const pageQuery = z.object({ cursor: z.string().max(500).optional(), limit })
+/** Deleting a note needs the version the owner saw: an edit he did not see is never deleted with it. */
+const requiredVersionQuery = z.object({ version: z.coerce.number().int().min(1) })
+
+/** A version number in the path; anything else cannot name a version: `not_found`. */
+function versionParam(c: Context): number {
+  const value = Number(c.req.param("version"))
+  if (!Number.isInteger(value) || value < 1) throw notFound("The version")
+  return value
+}
 
 /** Sync pushes come from the sync tool with a token, never from a browser. */
 function requireToken(c: Context<Env>) {
@@ -205,6 +239,26 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   api.get("/inbox", async (c) => c.json({ data: await inbox(ctx) }))
   api.get("/archive", async (c) => c.json(await archive(ctx, query(c, archiveQuery))))
   api.get("/audit", async (c) => c.json(await auditLog(ctx, query(c, auditQuery))))
+
+  // --- Notes ---
+  api.get("/notes", async (c) => c.json(await findNotes(ctx, query(c, findNotesQuery))))
+  api.post("/notes", async (c) => c.json({ data: await createNote(ctx, byOf(c), await body(c, createNoteBody)) }, 201))
+  api.get("/notes/:id", async (c) => c.json({ data: await noteDetail(ctx, idParam(c)) }))
+  api.patch("/notes/:id", async (c) => {
+    const { version, ...patch } = await body(c, updateNoteBody)
+    return c.json({ data: await updateNote(ctx, byOf(c), idParam(c), version, patch) })
+  })
+  api.delete("/notes/:id", async (c) => {
+    await deleteNote(ctx, byOf(c), idParam(c), query(c, requiredVersionQuery).version)
+    return c.body(null, 204)
+  })
+  api.get("/notes/:id/versions", async (c) => c.json(await listNoteVersions(ctx, idParam(c), query(c, pageQuery))))
+  api.get("/notes/:id/versions/:version", async (c) =>
+    c.json({ data: await getNoteVersion(ctx, idParam(c), versionParam(c)) }),
+  )
+  api.post("/notes/:id/restore", async (c) =>
+    c.json({ data: await restoreNote(ctx, byOf(c), idParam(c), await body(c, restoreNoteBody)) }),
+  )
 
   // --- T3 ---
   api.post("/threads/start", async (c) => {

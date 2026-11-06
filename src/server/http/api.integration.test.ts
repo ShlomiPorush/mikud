@@ -392,3 +392,86 @@ describe("the activity filters", () => {
     expect((await call("/audit?q=%20%20", { owner: true })).status).toBe(200)
   })
 })
+
+describe("notes", () => {
+  it("lets an agent create, list, read and edit a note, and keeps the versions", async () => {
+    const created = await call("/notes", {
+      method: "POST",
+      token: AGENT,
+      body: { title: "Release steps", body: "1. Tag" },
+    })
+    expect(created.status).toBe(201)
+    const id = created.json.data.id
+    const edited = await call(`/notes/${id}`, {
+      method: "PATCH",
+      token: AGENT,
+      body: { version: 1, body: "1. Tag\n2. Push" },
+    })
+    expect(edited.json.data).toMatchObject({ version: 2, body: "1. Tag\n2. Push" })
+    const list = await call("/notes?q=release", { token: AGENT })
+    expect(list.json.data.map((n: { id: string }) => n.id)).toEqual([id])
+    expect(list.json).toHaveProperty("nextCursor", null)
+    const detail = await call(`/notes/${id}`, { owner: true })
+    expect(detail.json.data).toMatchObject({ note: { id, version: 2 }, project: null })
+    const versions = await call(`/notes/${id}/versions`, { owner: true })
+    expect(versions.json.data.map((v: { version: number }) => v.version)).toEqual([2, 1])
+    const first = await call(`/notes/${id}/versions/1`, { token: AGENT })
+    expect(first.json.data).toMatchObject({ version: 1, body: "1. Tag" })
+    expect((await call(`/notes/${id}/versions/0`, { token: AGENT })).status).toBe(404)
+    expect((await call(`/notes/${id}/versions/x`, { token: AGENT })).status).toBe(404)
+  })
+
+  it("keeps restore and delete for the owner, at the version he saw", async () => {
+    const created = await call("/notes", { method: "POST", owner: true, body: { title: "Mine", body: "First" } })
+    const id = created.json.data.id
+    await call(`/notes/${id}`, { method: "PATCH", token: AGENT, body: { version: 1, body: "Agent's" } })
+    const restoreBody = { expectedVersion: 2, fromVersion: 1 }
+    expect((await call(`/notes/${id}/restore`, { method: "POST", token: AGENT, body: restoreBody })).status).toBe(403)
+    const restored = await call(`/notes/${id}/restore`, { method: "POST", owner: true, body: restoreBody })
+    expect(restored.json.data).toMatchObject({ version: 3, body: "First" })
+    expect((await call(`/notes/${id}?version=3`, { method: "DELETE", token: AGENT })).status).toBe(403)
+    expect((await call(`/notes/${id}`, { method: "DELETE", owner: true })).status).toBe(400)
+    const stale = await call(`/notes/${id}?version=2`, { method: "DELETE", owner: true })
+    expect([stale.status, stale.json.error.code]).toEqual([409, "version_conflict"])
+    expect((await call(`/notes/${id}?version=3`, { method: "DELETE", owner: true })).status).toBe(204)
+    expect((await call(`/notes/${id}`, { token: AGENT })).status).toBe(404)
+  })
+
+  it("validates note bodies, filters and cursors", async () => {
+    const tooLong = await call("/notes", {
+      method: "POST",
+      token: AGENT,
+      body: { title: "x", body: "y".repeat(100_001) },
+    })
+    expect([tooLong.status, tooLong.json.error.code]).toEqual([400, "validation_failed"])
+    expect((await call("/notes?createdBy=robot", { token: AGENT })).status).toBe(400)
+    expect((await call("/notes?sort=random", { token: AGENT })).status).toBe(400)
+    for (const title of ["a", "b"]) await call("/notes", { method: "POST", token: AGENT, body: { title } })
+    const page = await call("/notes?limit=1", { token: AGENT })
+    const cursor = page.json.nextCursor
+    expect(typeof cursor).toBe("string")
+    const other = await call(`/notes?limit=1&sort=title&cursor=${cursor}`, { token: AGENT })
+    expect([other.status, other.json.error.code]).toEqual([400, "validation_failed"])
+  })
+
+  it("pages by title through notes with the longest titles in Hebrew (R1)", async () => {
+    // Built from code points: Hebrew may only appear literally in the Hebrew locale file.
+    for (const letter of [0x5d0, 0x5d1]) {
+      const title = `${String.fromCodePoint(letter).repeat(299)}"`
+      await call("/notes", { method: "POST", token: AGENT, body: { title } })
+    }
+    const first = await call("/notes?sort=title&limit=1", { token: AGENT })
+    expect(first.json.nextCursor.length).toBeGreaterThan(500)
+    const second = await call(`/notes?sort=title&limit=1&cursor=${first.json.nextCursor}`, { token: AGENT })
+    expect(second.status).toBe(200)
+    expect(second.json.data).toHaveLength(1)
+    expect(second.json.data[0].id).not.toBe(first.json.data[0].id)
+  })
+
+  it("refuses a project delete while the project has notes", async () => {
+    const project = await call("/projects", { method: "POST", owner: true, body: { name: "Harbor" } })
+    await call("/notes", { method: "POST", token: AGENT, body: { title: "Harbor", projectId: project.json.data.id } })
+    const refused = await call(`/projects/${project.json.data.id}`, { method: "DELETE", owner: true })
+    expect([refused.status, refused.json.error.code]).toEqual([409, "conflict"])
+  })
+})

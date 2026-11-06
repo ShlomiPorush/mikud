@@ -32,6 +32,8 @@ export const LIMITS = {
   reason: 2_000,
   noteTitle: 300,
   noteBody: 100_000,
+  /** A notes cursor holds a title of up to 300 characters, as JSON in base64url: room for any title. */
+  noteCursor: 4_000,
 } as const
 
 export const createItemBody = z.object({
@@ -204,6 +206,25 @@ export const securitySnapshotBody = z.object({
       }),
     )
     .max(2_000),
+})
+
+export const createNoteBody = z.object({
+  title: text(LIMITS.noteTitle),
+  body: text(LIMITS.noteBody).optional(),
+  projectId: id.nullable().optional(),
+})
+
+export const updateNoteBody = z.object({
+  version: z.number().int().min(1),
+  title: text(LIMITS.noteTitle).optional(),
+  body: text(LIMITS.noteBody).optional(),
+  projectId: id.nullable().optional(),
+})
+
+/** `expectedVersion`: the note's version the owner saw; `fromVersion`: the version to make the newest. */
+export const restoreNoteBody = z.object({
+  expectedVersion: z.number().int().min(1),
+  fromVersion: z.number().int().min(1),
 })
 
 /** The label an agent writes as (`X-Mikud-Agent`, docs/api.md): `agent`, or `agent:` and its name. */
