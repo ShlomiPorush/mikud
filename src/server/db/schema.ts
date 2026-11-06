@@ -171,11 +171,68 @@ export const comments = pgTable(
     authorLabel: text("author_label"),
     text: text("text").notNull(),
     threadId: text("thread_id"),
+    /** The note this comment points to: set when the Telegram bot moved the item's text into a note. */
+    noteId: uuid("note_id").references(() => notes.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
     check("comments_author_kind_check", oneOf("author_kind", ACTOR_KINDS)),
     index("comments_item_idx").on(t.itemId),
+  ],
+)
+
+// Knowledge the owner and agents keep (requirements section 10). The body is Markdown. Agents may edit any note
+// and never delete one; every change is a row in note_versions, which the owner can restore.
+export const notes = pgTable(
+  "notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Null for a general note. A project with notes cannot be deleted until they move. */
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    /** Optimistic concurrency, and the number of the newest row in note_versions. */
+    version: integer("version").notNull().default(1),
+    createdBy: text("created_by", { enum: ACTOR_KINDS }).notNull(),
+    createdByLabel: text("created_by_label"),
+    updatedBy: text("updated_by", { enum: ACTOR_KINDS }).notNull(),
+    updatedByLabel: text("updated_by_label"),
+    createdAt: createdAt(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    check("notes_created_by_check", oneOf("created_by", ACTOR_KINDS)),
+    check("notes_updated_by_check", oneOf("updated_by", ACTOR_KINDS)),
+    check("notes_version_check", sql`${t.version} >= 1`),
+    index("notes_project_idx").on(t.projectId),
+    index("notes_updated_idx").on(t.updatedAt, t.id),
+  ],
+)
+
+// Every version of a note, the first included. project_id is a plain value, not a reference: deleting a project
+// never changes history, and a version whose project is gone cannot be restored.
+export const noteVersions = pgTable(
+  "note_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    noteId: uuid("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    projectId: uuid("project_id"),
+    authorKind: text("author_kind", { enum: ACTOR_KINDS }).notNull(),
+    authorLabel: text("author_label"),
+    /** The version this one restored, when it came from a restore. */
+    restoredFrom: integer("restored_from"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("note_versions_note_version_unique").on(t.noteId, t.version),
+    check("note_versions_author_kind_check", oneOf("author_kind", ACTOR_KINDS)),
+    check("note_versions_version_check", sql`${t.version} >= 1`),
+    index("note_versions_author_created_idx").on(t.authorKind, t.createdAt),
   ],
 )
 
@@ -276,6 +333,10 @@ export const telegramUpdates = pgTable(
     updateId: bigint("update_id", { mode: "number" }).primaryKey(),
     outcome: text("outcome", { enum: TELEGRAM_OUTCOMES }).notNull(),
     at: at("at").notNull().defaultNow(),
+    /** The inbox item a capture created; its reply's button names this row. */
+    itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
+    /** The note that capture's text moved into, once the owner pressed the button. */
+    noteId: uuid("note_id").references(() => notes.id, { onDelete: "set null" }),
   },
   () => [check("telegram_updates_outcome_check", oneOf("outcome", TELEGRAM_OUTCOMES))],
 )

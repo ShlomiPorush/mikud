@@ -553,6 +553,10 @@
       "item_update": "changed the item",
       "item_delete": "deleted the item",
       "comment_create": "commented",
+      "note_create": "created the note",
+      "note_update": "changed the note",
+      "note_restore": "restored a version of the note",
+      "note_delete": "deleted the note",
       "thread_link": "linked a T3 thread",
       "thread_update": "updated a T3 thread",
       "thread_move": "moved a T3 thread",
@@ -610,6 +614,7 @@
     },
     "entity": {
       "item": "An item",
+      "note": "A note",
       "project": "A project",
       "settings": "Settings",
       "device": "A device",

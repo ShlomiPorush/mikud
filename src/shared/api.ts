@@ -23,7 +23,16 @@ const repo = z
   .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/name")
   .max(200)
 
-export const LIMITS = { title: 300, body: 20_000, comment: 20_000, whereWeAre: 500, goal: 300, reason: 2_000 } as const
+export const LIMITS = {
+  title: 300,
+  body: 20_000,
+  comment: 20_000,
+  whereWeAre: 500,
+  goal: 300,
+  reason: 2_000,
+  noteTitle: 300,
+  noteBody: 100_000,
+} as const
 
 export const createItemBody = z.object({
   projectId: id.nullable().optional(),

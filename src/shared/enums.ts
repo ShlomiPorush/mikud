@@ -30,7 +30,7 @@ export const SYNC_OUTCOMES = ["succeeded", "partial", "failed"] as const
  * cutoff), `unknown` (it may have gone out; never resent) or `skipped` (the cutoff passed without a send).
  */
 export const JOB_STATES = ["sending", "sent", "failed", "unknown", "skipped"] as const
-export const TELEGRAM_OUTCOMES = ["item_created", "ignored", "refused"] as const
+export const TELEGRAM_OUTCOMES = ["item_created", "note_created", "ignored", "refused"] as const
 export const LANGUAGES = ["he", "en"] as const
 
 /**
@@ -43,6 +43,10 @@ export const AUDIT_ACTIONS = [
   "item.update",
   "item.delete",
   "comment.create",
+  "note.create",
+  "note.update",
+  "note.restore",
+  "note.delete",
   "thread.link",
   "thread.update",
   "thread.move",
@@ -88,6 +92,7 @@ export const AUDIT_ACTIONS = [
 /** What an audit row is about; each has a label in `audit.entity` of each locale file. */
 export const AUDIT_ENTITY_TYPES = [
   "item",
+  "note",
   "project",
   "settings",
   "device",

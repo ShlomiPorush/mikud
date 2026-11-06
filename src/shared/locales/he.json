@@ -553,6 +553,10 @@
       "item_update": "שינה את הפריט",
       "item_delete": "מחק את הפריט",
       "comment_create": "הגיב",
+      "note_create": "יצר את ההערה",
+      "note_update": "שינה את ההערה",
+      "note_restore": "שחזר גרסה של ההערה",
+      "note_delete": "מחק את ההערה",
       "thread_link": "קישר שיחת T3",
       "thread_update": "עדכן שיחת T3",
       "thread_move": "העביר שיחת T3",
@@ -610,6 +614,7 @@
     },
     "entity": {
       "item": "פריט",
+      "note": "הערה",
       "project": "פרויקט",
       "settings": "הגדרות",
       "device": "מכשיר",

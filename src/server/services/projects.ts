@@ -1,6 +1,6 @@
 import { and, eq, isNull, like, or } from "drizzle-orm"
 import type { Stage } from "../../shared/enums.ts"
-import { goals, items, projects, stageProposals, suppressions } from "../db/schema.ts"
+import { goals, items, notes, projects, stageProposals, suppressions } from "../db/schema.ts"
 import { AppError, forbidden, invalid, notFound } from "../errors.ts"
 import {
   type By,
@@ -294,7 +294,7 @@ export async function decideProposal(
 }
 
 /**
- * Owner only. A project with items is refused with `conflict` (delete or move its items first). Its T3
+ * Owner only. A project with items or notes is refused with `conflict` (delete or move them first). Its T3
  * project id is suppressed so the sync never recreates it.
  */
 export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void> {
@@ -304,6 +304,8 @@ export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void>
     if (!before) throw notFound("The project")
     const [item] = await tx.select({ id: items.id }).from(items).where(eq(items.projectId, id)).limit(1)
     if (item) throw new AppError("conflict", "The project still has items. Delete or move them first.")
+    const [note] = await tx.select({ id: notes.id }).from(notes).where(eq(notes.projectId, id)).limit(1)
+    if (note) throw new AppError("conflict", "The project still has notes. Delete or move them first.")
     if (before.t3ProjectId) {
       const [s] = await tx
         .insert(suppressions)

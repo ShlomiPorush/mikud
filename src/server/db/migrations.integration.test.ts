@@ -60,7 +60,7 @@ describe("migrations", () => {
     const rows = await sql<{ table_name: string }[]>`
       select table_name from information_schema.tables where table_schema = 'public' order by table_name`
     expect(rows.map((r) => r.table_name)).toEqual(expected)
-    expect(expected).toHaveLength(23)
+    expect(expected).toHaveLength(25)
   })
 
   it("enforce the unique keys the services rely on", async () => {
@@ -113,5 +113,23 @@ describe("migrations", () => {
     await sql`delete from items where id = ${item?.id}`
     const links = await sql`select 1 from item_threads where thread_id = 'thread-2'`
     expect(links).toHaveLength(0)
+  })
+
+  it("keep notes when their project is deleted, and drop a note's versions with it", async () => {
+    const [project] = await sql`insert into projects (name, slug) values ('Echo', 'echo') returning id`
+    const [note] = await sql`
+      insert into notes (project_id, title, created_by, updated_by)
+      values (${project?.id}, 'Keep me', 'owner', 'owner') returning id`
+    await sql`insert into note_versions (note_id, version, title, body, project_id, author_kind)
+      values (${note?.id}, 1, 'Keep me', '', ${project?.id}, 'owner')`
+    await refused("23001", () => sql`delete from projects where id = ${project?.id}`)
+    await refused(
+      "23505",
+      () => sql`insert into note_versions (note_id, version, title, body, author_kind)
+      values (${note?.id}, 1, 'Again', '', 'owner')`,
+    )
+    await refused("23514", () => sql`insert into notes (title, created_by, updated_by) values ('x', 'robot', 'owner')`)
+    await sql`delete from notes where id = ${note?.id}`
+    expect(await sql`select 1 from note_versions where note_id = ${note?.id}`).toHaveLength(0)
   })
 })

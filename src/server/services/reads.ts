@@ -509,13 +509,13 @@ export async function inbox(ctx: Ctx): Promise<ItemSummary[]> {
   return rows.map((i) => summary(i, new Map()))
 }
 
-type Page<T> = { data: T[]; nextCursor: string | null }
+export type Page<T> = { data: T[]; nextCursor: string | null }
 
-function encodeCursor(parts: unknown[]): string {
+export function encodeCursor(parts: unknown[]): string {
   return Buffer.from(JSON.stringify(parts)).toString("base64url")
 }
 
-function decodeCursor(cursor: string): unknown[] {
+export function decodeCursor(cursor: string): unknown[] {
   try {
     const parts = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))
     if (Array.isArray(parts)) return parts

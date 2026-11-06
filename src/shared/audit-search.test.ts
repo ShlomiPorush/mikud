@@ -28,7 +28,7 @@ describe("the audit catalogue", () => {
 describe("auditCodesMatching", () => {
   it("finds the actions whose English label holds the text, case-insensitive", () => {
     expect(auditCodesMatching("en", "Changed The").actions.sort()).toEqual(
-      ["account.password_change", "item.update", "project.update"].sort(),
+      ["account.password_change", "item.update", "note.update", "project.update"].sort(),
     )
     expect(auditCodesMatching("en", "created the item")).toEqual({ actions: ["item.create"], entityTypes: [] })
     expect(auditCodesMatching("en", "agent key").entityTypes).toEqual(["api_key"])
@@ -37,7 +37,7 @@ describe("auditCodesMatching", () => {
   it("finds the actions and entity types whose Hebrew label holds the text", () => {
     expect(auditCodesMatching("he", he.audit.action.item_create).actions).toEqual(["item.create"])
     expect(auditCodesMatching("he", CHANGED_HE).actions.sort()).toEqual(
-      ["account.password_change", "item.update", "project.update", "settings.update"].sort(),
+      ["account.password_change", "item.update", "note.update", "project.update", "settings.update"].sort(),
     )
     expect(auditCodesMatching("he", he.audit.entity.project).entityTypes).toEqual(["project"])
   })
