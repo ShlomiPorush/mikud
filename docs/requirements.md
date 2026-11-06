@@ -107,7 +107,24 @@ The inbox count is visible on the home screen and links to the inbox.
 
 There is one launch and no partial use.
 
-1. Everything in this document is built and verified.
+1. Everything in this document is built and verified, except section 10 (Notes), which the launch does not wait for.
 2. Dry run on real data, on the development stack on the owner's PC: every project is seeded with drafts (a stage proposal, goal, "where we are") written by an agent from T3 threads and the repositories; one real Telegram morning message is sent; the overview is shown at desktop and phone sizes.
 3. The owner reviews and approves or corrects.
 4. Only after approval: the owner deploys to production, the agent instruction goes into the shared agent configuration (proposed to the owner, who adds it), the reconciler schedule is enabled, and the `overview` daily page and its schedule are retired. The `overview` collector stays, run by the reconciler.
+
+## 10. Notes
+
+Status: approved by the owner on 2026-11-03. It is not part of the launch gate (section 9): the launch does not wait for it. The owner decided on 2026-11-06 that it may be built before the launch.
+
+Notes are where the owner and his agents keep information worth finding again: decisions, explanations, findings, links and summaries. An item is work to do and closes; a note is knowledge and does not close.
+
+- Fields: a title, a Markdown body and an optional project. A note without a project is a general note.
+- Every change keeps the previous version. The owner sees a note's versions, who wrote each one and when, and restores any of them; a restore is a new version.
+- Agents may find, read, create and edit notes, the owner's notes included, over MCP and the HTTP API. Agents may not delete a note; deleting is owner-only, in the UI.
+- The rules for agents (section 3) apply to notes: text written by agents and the bot is checked for secrets, and every change goes to the audit log. Notes are not a place for secrets or server details.
+- UI: a Notes page in the sidebar with search and filters (project; written by the owner or by an agent), a project's notes on its project page, and a Markdown editor with a preview that is correct in Hebrew (RTL) and English (LTR). Notes created or changed by agents appear in Agent updates on the Overview.
+- Telegram: the bot files text in the inbox as an item, as in section 5, and its answer carries a button that moves the text into a new general note. When the owner does not press it, the item stays in the inbox and nothing is lost. Pressing it closes the inbox item as `not_relevant` with a comment that links the note (owner's decision, 2026-11-06); the bot never deletes an item.
+- Search runs in PostgreSQL, with no extra service.
+- The agent instruction says when an agent writes a note and when it files an item.
+- Not in the first version: files and images (Mikud keeps its state only in PostgreSQL and has no volume), tags, and links between notes.
+- Considered and not adopted (2026-11-03): running AFFiNE next to Mikud, or taking its code. Its server is under the AFFiNE Enterprise Edition license with no per-file boundary to the MPL 2.0 parts, its documents are CRDT updates written in the browser (outside the services layer, the audit and the secret check), and its right-to-left support has open issues. Ideas only, as with Kanzo.
