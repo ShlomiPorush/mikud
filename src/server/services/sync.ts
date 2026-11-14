@@ -305,7 +305,8 @@ function linkChanged(link: ThreadLinkRow, next: Partial<ThreadLinkRow>): boolean
 
 /**
  * A link on a child thread moves to the top-level thread: when the root has its own link, the child's
- * link goes; otherwise the link is re-pointed at the root thread.
+ * link goes; otherwise the link is re-pointed at the root thread, unless the owner suppressed the root
+ * thread or its T3 project (when the snapshot names it): the child's link then stays as it is.
  */
 async function foldChildLink(
   ctx: Ctx,
@@ -329,6 +330,12 @@ async function foldChildLink(
         before: child,
         after: { foldedInto: rootId, itemId: rootLink.itemId },
       })
+    } else if (
+      (await isSuppressed(tx, "thread", rootId)) ||
+      (root?.t3ProjectId && (await isSuppressed(tx, "project", root.t3ProjectId)))
+    ) {
+      // The owner deleted the root thread's item (or its project): only the owner tracks it again.
+      return run.add("childLinksSuppressed")
     } else {
       const [after] = await tx
         .update(itemThreads)

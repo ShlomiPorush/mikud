@@ -352,6 +352,47 @@ describe("applyT3Snapshot", () => {
     expect(await t.ctx.db.select().from(items)).toHaveLength(3)
   })
 
+  it("never folds a child's link into a top-level thread the owner suppressed", async () => {
+    // The owner deleted the item of root-1: root-1 is suppressed and has no link.
+    const deleted = await linkedItem("in_progress", ["root-1"])
+    await deleteItem(t.ctx, owner, deleted.id)
+    const item = await linkedItem("in_progress", ["child-1"])
+
+    // The parent is not in the snapshot: it is still the top-level thread the fold would move the link to.
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("child-1", { parentThreadId: "root-1" })]))
+    expect(result.counts).toMatchObject({ childLinksSuppressed: 1 })
+    expect(result.counts.childLinksFolded).toBeUndefined()
+    expect((await itemOf("child-1"))?.id).toBe(item.id)
+    expect(await itemOf("root-1")).toBeUndefined()
+    expect(await t.ctx.db.select().from(audit).where(eq(audit.action, "thread.move"))).toHaveLength(0)
+
+    const before = await getItemRow(t.ctx.db, item.id)
+    await expect(
+      startThread(t.ctx, agent, { threadId: "root-1", parentThreadId: null, title: "Root" }),
+    ).rejects.toMatchObject({ code: "suppressed" })
+    const again = await applyT3Snapshot(t.ctx, snapshot([thread("root-1", { updatedAt: ago(HOUR / 2) })]))
+    expect(again.counts).toMatchObject({ threadsSuppressed: 1 })
+    expect(again.counts.threadsUpdated).toBeUndefined()
+    expect(await getItemRow(t.ctx.db, item.id)).toMatchObject({ version: before.version })
+  })
+
+  it("never folds a child's link into a top-level thread of a project the owner deleted", async () => {
+    const gone = await createProject(t.ctx, owner, { name: "Gone", t3ProjectId: "t3-gone" })
+    await deleteProject(t.ctx, owner, gone.id)
+    const item = await linkedItem("in_progress", ["child-1"])
+
+    const result = await applyT3Snapshot(
+      t.ctx,
+      snapshot([thread("root-1", { t3ProjectId: "t3-gone" }), thread("child-1", { parentThreadId: "root-1" })], {
+        projects: [],
+      }),
+    )
+    expect(result.counts).toMatchObject({ childLinksSuppressed: 1, threadsSuppressed: 1 })
+    expect(result.counts.childLinksFolded).toBeUndefined()
+    expect((await itemOf("child-1"))?.id).toBe(item.id)
+    expect(await itemOf("root-1")).toBeUndefined()
+  })
+
   it("keeps going when a record fails and records it in sync_runs", async () => {
     const result = await applyT3Snapshot(
       t.ctx,
