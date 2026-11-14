@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { items, securitySources, syncRuns } from "../db/schema.ts"
+import { audit, items, securitySources, syncRuns } from "../db/schema.ts"
 import { agent, createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { recordVisit, updateSettings } from "./admin.ts"
 import { addComment, captureItem, createItem, createItemTx, linkThread, updateItem } from "./items.ts"
@@ -251,5 +251,83 @@ describe("other read models", () => {
     expect(second.nextCursor).toBeNull()
     const ids = [...first.data, ...second.data].map((r) => r.id)
     expect(ids).toEqual([...ids].sort((x, y) => y - x))
+  })
+})
+
+describe("ids in capitals", () => {
+  /** Every entity id the audit stored for an entity type. */
+  async function storedIds(entityType: string): Promise<string[]> {
+    const rows = await t.ctx.db.select({ entityId: audit.entityId }).from(audit).where(eq(audit.entityType, entityType))
+    return rows.map((row) => row.entityId ?? "")
+  }
+
+  it("records a change made through an item id in capitals under the item's own id", async () => {
+    const p = await createProject(t.ctx, owner, { name: "Lantern" })
+    const item = await createItem(t.ctx, agent, { projectId: p.id, type: "task", title: "Build" })
+    const upper = item.id.toUpperCase()
+    await updateItem(t.ctx, agent, upper, 1, { status: "waiting_on_you", body: "Changed" })
+    await addComment(t.ctx, agent, upper, { text: "Through capitals." })
+    await linkThread(t.ctx, agent, upper, { threadId: "thread-capitals" })
+
+    expect(await storedIds("item")).toEqual([item.id, item.id, item.id, item.id])
+    const detail = await itemDetail(t.ctx, item.id)
+    expect(detail.audit.map((row) => row.action)).toEqual([
+      "thread.link",
+      "comment.create",
+      "item.update",
+      "item.create",
+    ])
+    const updates = (await morning(t.ctx)).agentUpdates.flatMap((group) => group.updates)
+    expect(updates.filter((u) => u.kind === "status")).toEqual([
+      expect.objectContaining({ itemId: item.id, from: "todo", to: "waiting_on_you" }),
+    ])
+  })
+
+  it("records a change made through a project id in capitals under the project's own id", async () => {
+    const p = await createProject(t.ctx, owner, { name: "Compass" })
+    const upper = p.id.toUpperCase()
+    await updateProject(t.ctx, agent, upper, { whereWeAre: "Parser done", goal: "First import" })
+    await updateProject(t.ctx, agent, upper, { goal: "Second import" })
+    await proposeStage(t.ctx, agent, upper, { stage: "poc", reason: "Runs end to end" })
+    await proposeStage(t.ctx, agent, upper, { stage: "poc", reason: "Runs end to end, twice" })
+    const rows = await t.ctx.db
+      .select({ action: audit.action, entityId: audit.entityId })
+      .from(audit)
+      .where(eq(audit.entityType, "project"))
+    expect(rows.filter((row) => row.entityId !== p.id)).toEqual([])
+    expect(rows.map((row) => row.action).sort()).toEqual([
+      "goal.close",
+      "goal.create",
+      "goal.create",
+      "project.create",
+      "project.update",
+      "proposal.create",
+      "proposal.update",
+    ])
+  })
+
+  it("shows a row stored earlier under an id in capitals in the item's history and the morning updates", async () => {
+    const item = await createItem(t.ctx, agent, { type: "task", title: "Older row" })
+    const [after] = await t.ctx.db
+      .update(items)
+      .set({ status: "in_progress", version: 2 })
+      .where(eq(items.id, item.id))
+      .returning()
+    await t.ctx.db.insert(audit).values({
+      at: t.ctx.clock(),
+      actorKind: "agent",
+      actorLabel: "agent",
+      action: "item.update",
+      entityType: "item",
+      entityId: item.id.toUpperCase(),
+      before: item,
+      after,
+      source: "mcp",
+    })
+    expect((await itemDetail(t.ctx, item.id)).audit.map((row) => row.action)).toEqual(["item.update", "item.create"])
+    const updates = (await morning(t.ctx)).agentUpdates.flatMap((group) => group.updates)
+    expect(updates.filter((u) => u.kind === "status")).toEqual([
+      expect.objectContaining({ itemId: item.id, from: "todo", to: "in_progress" }),
+    ])
   })
 })

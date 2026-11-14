@@ -158,9 +158,15 @@ export async function updateProject(ctx: Ctx, by: By, id: string, patch: Project
         .returning()
       if (!row) throw notFound("The project")
       after = row
-      await writeAudit(ctx, tx, by, { action: "project.update", entityType: "project", entityId: id, before, after })
+      await writeAudit(ctx, tx, by, {
+        action: "project.update",
+        entityType: "project",
+        entityId: after.id,
+        before,
+        after,
+      })
     }
-    if (patch.goal !== undefined) await setGoalTx(ctx, tx, by, id, patch.goal)
+    if (patch.goal !== undefined) await setGoalTx(ctx, tx, by, before.id, patch.goal)
     return after
   })
 }
@@ -223,7 +229,7 @@ export async function proposeStage(
       await writeAudit(ctx, tx, by, {
         action: "proposal.update",
         entityType: "project",
-        entityId: projectId,
+        entityId: row.projectId,
         before: open,
         after: row,
       })
@@ -241,7 +247,12 @@ export async function proposeStage(
       })
       .returning()
     if (!row) throw new Error("insert returned no row")
-    await writeAudit(ctx, tx, by, { action: "proposal.create", entityType: "project", entityId: projectId, after: row })
+    await writeAudit(ctx, tx, by, {
+      action: "proposal.create",
+      entityType: "project",
+      entityId: row.projectId,
+      after: row,
+    })
     return row
   })
 }
@@ -321,6 +332,6 @@ export async function deleteProject(ctx: Ctx, by: By, id: string): Promise<void>
         })
     }
     await tx.delete(projects).where(eq(projects.id, id))
-    await writeAudit(ctx, tx, by, { action: "project.delete", entityType: "project", entityId: id, before })
+    await writeAudit(ctx, tx, by, { action: "project.delete", entityType: "project", entityId: before.id, before })
   })
 }

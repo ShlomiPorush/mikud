@@ -14,7 +14,9 @@ import {
 // Request bodies of the HTTP API (docs/api.md) and the MCP tools. The UI, the Telegram bot and the sync
 // tool import these, so a change here is a change of the contract.
 
-const id = z.uuid()
+/** A UUID in lower case, as the database writes one: a caller may spell it in capitals. */
+export const uuidSchema = z.uuid().transform((value) => value.toLowerCase())
+const id = uuidSchema
 const text = (max: number) => z.string().max(max)
 const externalId = z.string().trim().min(1).max(200)
 const isoDate = z.coerce.date()
@@ -241,9 +243,8 @@ export const auditFilterSchema = z.object({
     .string()
     .regex(/^[a-z_]{1,30}\.[a-z_]{1,30}$/, "an action code")
     .optional(),
-  // Lowercase, as the database writes a uuid: an address may hold one in capitals.
-  projectId: id.transform((value) => value.toLowerCase()).optional(),
-  itemId: id.transform((value) => value.toLowerCase()).optional(),
+  projectId: id.optional(),
+  itemId: id.optional(),
   q: z
     .string()
     .max(200)

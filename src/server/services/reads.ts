@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm"
-import type { AuditFilters } from "../../shared/api.ts"
+import { type AuditFilters, uuidSchema } from "../../shared/api.ts"
 import { auditCodesMatching } from "../../shared/audit-search.ts"
 import {
   ACTOR_KINDS,
@@ -236,9 +236,10 @@ async function agentUpdates(ctx: Ctx, since: Date, names: ReadonlyMap<string, st
     .orderBy(desc(comments.createdAt))
     .limit(MAX_UPDATES)
   const statusRows = await ctx.db
-    .select({ entry: audit, title: items.title, projectId: items.projectId })
+    .select({ entry: audit, itemId: items.id, title: items.title, projectId: items.projectId })
     .from(audit)
-    .innerJoin(items, sql`${items.id}::text = ${audit.entityId}`)
+    // A row written before ids were stored in lower case may hold its item's id in capitals.
+    .innerJoin(items, sql`${items.id}::text = lower(${audit.entityId})`)
     .where(
       and(
         gt(audit.at, since),
@@ -287,7 +288,7 @@ async function agentUpdates(ctx: Ctx, since: Date, names: ReadonlyMap<string, st
     add(r.projectId, {
       kind: "status",
       at: r.entry.at,
-      itemId: r.entry.entityId ?? "",
+      itemId: r.itemId,
       itemTitle: r.title,
       actorKind: r.entry.actorKind,
       actorLabel: r.entry.actorLabel,
@@ -480,7 +481,8 @@ export async function itemDetail(ctx: Ctx, id: string) {
   const history = await ctx.db
     .select()
     .from(audit)
-    .where(and(eq(audit.entityType, "item"), eq(audit.entityId, id)))
+    // A row written before ids were stored in lower case may hold the item's id in capitals.
+    .where(and(eq(audit.entityType, "item"), sql`lower(${audit.entityId}) = ${item.id}`))
     .orderBy(desc(audit.id))
     .limit(100)
   return {
@@ -619,8 +621,13 @@ function auditScope(options: AuditLogOptions): AuditScope {
   set("q", q)
   if (q) set("lang", options.lang)
   set("entityType", options.entityType)
-  set("entityId", options.entityId)
+  // Any text names an entity; a UUID in capitals names the same one as in lower case.
+  set("entityId", isUuid(options.entityId) ? options.entityId.toLowerCase() : options.entityId)
   return scope
+}
+
+function isUuid(value: string | undefined): value is string {
+  return value !== undefined && uuidSchema.safeParse(value).success
 }
 
 /** A short hash of every filter in effect, so a cursor pages only the list it came from; null with no filter. */
@@ -662,7 +669,8 @@ function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): S
   if (scope.agent && use("agent"))
     where.push(sql`(${audit.actorKind} = 'agent' and ${audit.actorLabel} = ${scope.agent})`)
   if (scope.action && use("action")) where.push(eq(audit.action, scope.action))
-  // An audit row keeps the id as the request named it, which may be in capitals; the filters are lowercase.
+  // Audit rows store ids in lower case; a row written before that may hold the id as the request named it, in
+  // capitals. The filters are lowercase.
   if (scope.projectId && use("projectId"))
     // The project's own rows, and the rows of the items and notes in it now (a comment or a thread is its item's
     // row). A deleted note's rows have no project any more: they show only without the project filter.
@@ -671,7 +679,10 @@ function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): S
     )
   if (scope.itemId) where.push(sql`(${audit.entityType} = 'item' and lower(${audit.entityId}) = ${scope.itemId})`)
   if (scope.entityType) where.push(eq(audit.entityType, scope.entityType))
-  if (scope.entityId) where.push(eq(audit.entityId, scope.entityId))
+  if (scope.entityId)
+    where.push(
+      isUuid(scope.entityId) ? sql`lower(${audit.entityId}) = ${scope.entityId}` : eq(audit.entityId, scope.entityId),
+    )
   if (scope.q) where.push(auditSearch(scope.q, scope.lang))
   return where
 }

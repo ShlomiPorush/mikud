@@ -208,7 +208,7 @@ export async function updateItemTx(ctx: Ctx, tx: Tx, by: By, id: string, version
     .where(and(eq(items.id, id), eq(items.version, version)))
     .returning()
   if (!after) throw new AppError("version_conflict", "The item changed since you read it. Read it again and retry.")
-  await writeAudit(ctx, tx, by, { action: "item.update", entityType: "item", entityId: id, before, after })
+  await writeAudit(ctx, tx, by, { action: "item.update", entityType: "item", entityId: after.id, before, after })
   return after
 }
 
@@ -254,7 +254,7 @@ export async function deleteItem(ctx: Ctx, by: By, id: string, version?: number)
     await writeAudit(ctx, tx, by, {
       action: "item.delete",
       entityType: "item",
-      entityId: id,
+      entityId: before.id,
       before: { ...before, threads: links.map((l) => l.threadId) },
     })
   })
@@ -290,7 +290,7 @@ export async function addCommentTx(ctx: Ctx, tx: Tx, by: By, itemId: string, inp
     })
     .returning()
   if (!row) throw new Error("insert returned no row")
-  await writeAudit(ctx, tx, by, { action: "comment.create", entityType: "item", entityId: itemId, after: row })
+  await writeAudit(ctx, tx, by, { action: "comment.create", entityType: "item", entityId: row.itemId, after: row })
   return row
 }
 
@@ -368,7 +368,12 @@ export async function insertLinkTx(
     .onConflictDoNothing({ target: itemThreads.threadId })
     .returning()
   if (inserted)
-    await writeAudit(ctx, tx, by, { action: "thread.link", entityType: "item", entityId: itemId, after: inserted })
+    await writeAudit(ctx, tx, by, {
+      action: "thread.link",
+      entityType: "item",
+      entityId: inserted.itemId,
+      after: inserted,
+    })
   return inserted ?? null
 }
 

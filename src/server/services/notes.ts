@@ -226,7 +226,7 @@ export async function deleteNote(ctx: Ctx, by: By, id: string, version: number):
     await writeAudit(ctx, tx, by, {
       action: "note.delete",
       entityType: "note",
-      entityId: id,
+      entityId: before.id,
       before: auditView(before),
     })
   })

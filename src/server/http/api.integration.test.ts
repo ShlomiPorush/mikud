@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createApp } from "../app.ts"
 import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
+import { createProject, updateProject } from "../services/projects.ts"
 import { createAgentKey, type TestCore, testCore } from "../testing/app.ts"
 import { TestBrowser } from "../testing/browser.ts"
-import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
+import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 import { clientAddress, RateLimiter } from "./auth.ts"
 
 const ORIGIN = "http://127.0.0.1:8090"
@@ -435,6 +436,56 @@ describe("routes and error codes", () => {
       body: { threadId: "thread-del", parentThreadId: null, title: "Delete" },
     })
     expect([again.status, again.json.error.code]).toEqual([409, "suppressed"])
+  })
+
+  it("takes ids in capitals as the same ids: the item's history lists every change", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Lantern" })
+    await updateProject(t.ctx, owner, project.id, { goal: "First light" })
+    const goalId: string = (await call(`/projects/${project.id}`, { token: AGENT })).json.data.goal.id
+    const created = await call("/items", {
+      method: "POST",
+      token: AGENT,
+      body: { type: "task", title: "Capitals", projectId: project.id.toUpperCase(), goalId: goalId.toUpperCase() },
+    })
+    const id: string = created.json.data.id
+    expect(created.json.data).toMatchObject({ projectId: project.id, goalId })
+    const upper = id.toUpperCase()
+
+    const updated = await call(`/items/${upper}`, {
+      method: "PATCH",
+      token: AGENT,
+      body: { version: 1, status: "done" },
+    })
+    expect([updated.status, updated.json.data.id, updated.json.data.version]).toEqual([200, id, 2])
+    // The same project in capitals is no move: the goal stays and nothing changes.
+    const same = await call(`/items/${upper}`, {
+      method: "PATCH",
+      token: AGENT,
+      body: { version: 2, projectId: project.id.toUpperCase() },
+    })
+    expect(same.json.data).toMatchObject({ projectId: project.id, goalId, version: 2 })
+    const comment = await call(`/items/${upper}/comments`, {
+      method: "POST",
+      token: AGENT,
+      body: { text: "Capitals." },
+    })
+    expect(comment.status).toBe(201)
+    const link = { threadId: "thread-capitals", parentThreadId: null }
+    expect((await call(`/items/${upper}/threads`, { method: "POST", token: AGENT, body: link })).status).toBe(201)
+    // The thread is linked to this item already: no conflict.
+    expect((await call(`/items/${upper}/threads`, { method: "POST", token: AGENT, body: link })).status).toBe(200)
+
+    const detail = await call(`/items/${id}`, { owner: true })
+    expect(detail.json.data.audit.map((row: { action: string }) => row.action)).toEqual([
+      "thread.link",
+      "comment.create",
+      "item.update",
+      "item.create",
+    ])
+    expect(detail.json.data.audit.every((row: { entityId: string }) => row.entityId === id)).toBe(true)
+    // A project read through its id in capitals shows its current goal.
+    const projectDetail = await call(`/projects/${project.id.toUpperCase()}`, { token: AGENT })
+    expect(projectDetail.json.data).toMatchObject({ project: { id: project.id }, goal: { id: goalId } })
   })
 })
 
