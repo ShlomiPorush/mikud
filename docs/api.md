@@ -7,7 +7,7 @@ Status: implemented in `src/server/http/`, `src/server/auth/`, `src/server/setti
 - Base path `/api/v1`. JSON in and out (`Content-Type: application/json`). Bodies are limited to 512 KiB, sync snapshots to 16 MiB. The limits apply after authentication: a request without valid credentials is refused before the application reads its body.
 - Success: `{"data": ...}`. Paged lists: `{"data": [...], "nextCursor": "..." | null}`; pass `cursor=<nextCursor>` for the next page. `201` for a created resource, `204` (no body) for a delete.
 - Error: `{"error": {"code": "<code>", "message": "<for people>", ...details}}`. Branch on `code`, never on `message`.
-- Times are ISO 8601 strings in UTC. Ids are UUIDs, except T3 thread and project ids (opaque strings, up to 200 characters). A UUID is accepted in any case and answered and recorded in lower case.
+- Times are ISO 8601 strings in UTC. Ids are UUIDs, except T3 thread and project ids (opaque strings, up to 200 characters). A UUID is accepted in any case and answered and recorded in lower case; an older audit row may hold one as the request spelled it.
 - Codes (stage, status, type, severity, actor kind) are the English codes of `src/shared/enums.ts`. Labels come from the locale files.
 - Unknown body fields are ignored. A path id that is not a UUID answers `not_found`.
 
