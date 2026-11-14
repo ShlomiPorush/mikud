@@ -223,6 +223,9 @@ export function createAuth(options: AuthOptions) {
     }
     if ((TRUST_DEVICE_PATHS as readonly string[]).includes(path) && body.trustDevice)
       throw refuse("BAD_REQUEST", "TRUST_DEVICE_UNSUPPORTED", "Adiutor asks for the code at every sign-in.")
+    // Enrolment takes the authenticator app only (totp, Better Auth's default); a Telegram code is for sign-in.
+    if (path === "/two-factor/enable" && body.method !== undefined && body.method !== "totp")
+      throw refuse("BAD_REQUEST", "TOTP_ONLY", "Two-factor is set up with an authenticator app.")
     if (path === "/two-factor/generate-backup-codes") {
       await audit(ownerBy(await readOwner(ctx)), "account.backup_codes_new", "account")
       return
