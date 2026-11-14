@@ -224,3 +224,75 @@ describe("Adiutor's own agent keys", () => {
     expect(scanner.find("see build.corp.example")).toBeNull()
   })
 })
+
+describe("long runs without whitespace", () => {
+  // A note body may be 100,000 characters, and the check runs on the server's only thread. No rule may
+  // rescan a run from many starts, so the cost stays linear and these shapes take milliseconds.
+  const budgetMs = 100
+  const scanner = createSecretScanner(["corp.example"])
+  const timed = <T>(fn: () => T): [T, number] => {
+    const start = performance.now()
+    const result = fn()
+    return [result, performance.now() - start]
+  }
+  const header = `${"ey"}J${rep("A", 8)}`
+
+  it.each([
+    ["-eyJ", rep(`-${"ey"}J`, 100_000), null],
+    ["a.", rep("a.", 100_000), null],
+    ["a-", rep("a-", 100_000), null],
+    [".eyJAAAAAAAA", rep(`.${header}`, 100_000), "jwt"],
+    ["-eyJAAAAAAAA.eyJ", rep(`-${header}.${"ey"}J`, 100_000), "jwt"],
+    ["a long scheme-like run before ://", rep(`${rep("a.", 32)}://${rep("u", 2_000)} `, 100_000), null],
+    ["a user and password without @", `x://u:${rep("p:", 100_000)}`, null],
+    ["a://b:c", rep("a://b:c", 100_000), null],
+  ])(
+    "checks %s at 100,000 characters in linear time",
+    (_, text, rule) => {
+      const [found, findMs] = timed(() => scanner.find(text))
+      expect(found).toBe(rule)
+      expect(findMs).toBeLessThan(budgetMs)
+      const [out, redactMs] = timed(() => scanner.redact(text))
+      expect(redactMs).toBeLessThan(budgetMs)
+      if (rule === null) expect(out).toBe(text)
+      else expect(scanner.find(out)).toBeNull()
+    },
+    30_000,
+  )
+
+  it("still finds URL credentials, also with a long password", () => {
+    const password = rep("Ab9_-x:Q", 1_000)
+    const text = `clone https://oauth2:${password}@git.example.org/repo.git`
+    expect(scanner.find(text)).toBe("url_credentials")
+    expect(scanner.redact(text)).toBe(`clone https://oauth2:${REDACTED}@git.example.org/repo.git`)
+    expect(scanner.find(`redis+sentinel://cache:${"Wint3r"}IsComing@cache.example.com/0`)).toBe("url_credentials")
+  })
+
+  it("finds URL credentials after a scheme of up to 32 characters", () => {
+    const credentials = `://app:${"S3cret"}Passw0rd@db.example.com/app`
+    expect(scanner.find(`${rep("x", 32)}${credentials}`)).toBe("url_credentials")
+    expect(scanner.find(`${rep("x", 33)}${credentials}`)).toBeNull()
+  })
+
+  it.each([
+    ["at the start of the text", fake.jwt],
+    ["after Bearer", `Authorization: Bearer ${fake.jwt}`],
+    ["after =", `token_value=${fake.jwt}`],
+    ["in quotes", `{"id_token":"${fake.jwt}"}`],
+  ])("still finds a short JWT %s", (_, text) => {
+    expect(scanner.find(text)).toBe("jwt")
+    expect(scanner.redact(text)).not.toContain(fake.jwt)
+  })
+
+  it("still finds a JWT whose header is several kilobytes", () => {
+    // A header with an embedded certificate chain (x5c) is long; the header segment has no length cap.
+    const jwt = `${"ey"}J${rep("hbGciOiJSUzI1NiIsIng1YyI6WyJNSUlD", 4_000)}.${"ey"}JzdWIiOiIxMjM0NTY3ODkwIn0.${rep("dBjftJeZ4C", 43)}`
+    expect(scanner.find(`header ${jwt} end`)).toBe("jwt")
+    expect(scanner.redact(`header ${jwt} end`)).toBe(`header ${REDACTED} end`)
+  })
+
+  it("does not start a JWT inside a run of token characters", () => {
+    // The price of linear time: a JWT glued to a word by "-" is not found.
+    expect(scanner.find(`id-${fake.jwt}`)).toBeNull()
+  })
+})
