@@ -59,8 +59,8 @@ describe("clientAddress", () => {
   })
 
   it("skips an entry Better Auth cannot read, without failing", async () => {
-    expect(await keyOf(["1.2.3.4/99"], "1.2.3.4", "203.0.113.5")).toBe("1.2.3.4")
-    expect(await keyOf(["1.2.3.4/99", "192.0.2.0/24"], PROXY, "203.0.113.5")).toBe("203.0.113.5")
+    expect(await keyOf(["198.51.100.30/99"], "198.51.100.30", "203.0.113.5")).toBe("198.51.100.30")
+    expect(await keyOf(["198.51.100.30/99", "192.0.2.0/24"], PROXY, "203.0.113.5")).toBe("203.0.113.5")
   })
 
   it("keys IPv6 clients by their /64, as Better Auth does", async () => {

@@ -65,7 +65,8 @@ export class RateLimiter {
  * trusted proxies (ADIUTOR_TRUSTED_PROXIES); every other request is the socket peer itself. Both questions go to
  * Better Auth's own resolver (`getIP`, with the options its limiter has), so a proxy entry means the same here as in
  * Better Auth's limits, and the forwarded address is the first untrusted hop from the right, never the leftmost one.
- * A header Better Auth cannot read falls back to the peer: one shared bucket, as without a proxy setting.
+ * A header Better Auth cannot read falls back to the peer in production: one shared bucket, as without a proxy
+ * setting (under NODE_ENV test or development Better Auth answers 127.0.0.1 instead, also one shared bucket).
  */
 export function clientAddress(trustedProxies: string[], peer: (c: Context) => string): (c: Context) => string {
   const header = "x-forwarded-for"

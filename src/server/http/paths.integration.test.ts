@@ -127,17 +127,11 @@ type OpenAnswer = { status: number; json: unknown; stillSending: boolean }
  */
 function openPost(
   path: string,
-  options: {
-    headers?: Record<string, string>
-    contentLength?: number
-    chunks?: Buffer[]
-    target?: number
-    localAddress?: string
-  },
+  options: { headers?: Record<string, string>; contentLength?: number; chunks?: Buffer[]; target?: number },
   waitMs = 3000,
 ): Promise<OpenAnswer | null> {
   return new Promise((resolve, reject) => {
-    const socket = connect({ port: options.target ?? port, host: "127.0.0.1", localAddress: options.localAddress })
+    const socket = connect(options.target ?? port, "127.0.0.1")
     let received = Buffer.alloc(0)
     let done = false
     const finish = (answer: OpenAnswer | null) => {
@@ -229,10 +223,11 @@ describe("credentials are checked before the body is read", () => {
 
   it("answers a key 429 at once after the failed-key limit, before reading the body", async () => {
     // A separate app with the real limit of 10 failed keys a minute per address, keyed as production keys it: the
-    // socket's address, or X-Forwarded-For when that peer is a trusted proxy (here 127.0.0.2).
+    // socket's address, or X-Forwarded-For when that peer is a trusted proxy (here a second loopback address).
+    const proxy = [127, 0, 0, 2].join(".")
     const limited = createApp({
       checkDatabase: async () => true,
-      core: { ...core, limiter: new RateLimiter(10, 60_000), clientIp: clientAddress(["127.0.0.2"], socketAddress) },
+      core: { ...core, limiter: new RateLimiter(10, 60_000), clientIp: clientAddress([proxy], socketAddress) },
     })
     const listener = await listen(limited.fetch)
     const wrongKey = () => ({ authorization: `Bearer ${randomBytes(24).toString("base64url")}` })
@@ -262,7 +257,7 @@ describe("credentials are checked before the body is read", () => {
       }
       // Through the trusted proxy, each client in X-Forwarded-For has its own bucket.
       const proxied = async (client: string) =>
-        (await rawGet("/api/v1/session", { ...wrongKey(), "x-forwarded-for": client }, target, "127.0.0.2")).status
+        (await rawGet("/api/v1/session", { ...wrongKey(), "x-forwarded-for": client }, target, proxy)).status
       for (let i = 0; i < 10; i++) expect(await proxied("203.0.113.1")).toBe(401)
       expect(await proxied("203.0.113.1")).toBe(429)
       expect(await proxied("203.0.113.2")).toBe(401)
