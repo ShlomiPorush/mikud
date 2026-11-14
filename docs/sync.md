@@ -12,6 +12,8 @@ Status: built and tested against fixtures and a stub server. The server routes i
 4. Finds each project's GitHub repository: from T3's repository identity when its provider is GitHub, otherwise by matching the project's folder (`workspaceRoot` or the identity's `rootPath`) against the snapshot's local repositories and their worktrees, ignoring case and separators.
 5. Sends `POST /api/v1/sync/t3`, then `POST /api/v1/sync/security` for the project repositories found in the snapshot, and prints each answer.
 
+The server refuses times more than 5 minutes ahead of its own clock ([api.md](api.md), "Times later than the server's clock"). Keep the PC's clock, and the clocks behind T3's and the collector's times, set automatically. When the PC runs ahead, the run prints `refused (HTTP 400)` with `validation_failed` and Settings, Sync shows the T3 run as failed; a single record that is ahead shows in the answer's `errors` as `time_in_future`.
+
 Security values follow the snapshot honestly: an enabled family sends its alert counts by severity; a family carried over from an earlier run (`stale.since`) keeps its counts with that time as `asOf`; `not-enabled`, `no-access` and `error` keep their meaning; a missing or unrecognized family is `unknown`. `asOf` is always the source's last successful read, never the time of the sync. Code scanning rule levels are counted, never dropped: `error` and an unknown severity as medium, `warning` and `note` as low.
 
 ## Settings

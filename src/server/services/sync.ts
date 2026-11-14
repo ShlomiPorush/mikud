@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import type { SecuritySnapshot, T3Snapshot } from "../../shared/api.ts"
 import { items, itemThreads, projects, securitySources, syncRuns } from "../db/schema.ts"
-import { AppError } from "../errors.ts"
+import { AppError, invalid } from "../errors.ts"
 import { errorFacts, log } from "../log.ts"
 import { type By, type Ctx, inLinkTx, inTx, writeAudit } from "./context.ts"
 import { createItemTx, type ItemRow, isSuppressed, type ThreadLinkRow, updateItemTx } from "./items.ts"
@@ -19,6 +19,16 @@ export type SyncResult = {
 
 const SYNC: By = { actor: { kind: "sync", label: "sync" }, source: "sync" }
 const SUCCESSFUL = ["succeeded", "partial"] as const
+
+/**
+ * How far ahead of the server's clock a pushed time may be. A later time is refused: the newer record always
+ * wins, so one far in the future would stand against every honest snapshot after it.
+ */
+export const SYNC_CLOCK_SKEW_MS = 5 * 60_000
+const TIME_IN_FUTURE = "time_in_future"
+
+const latestAllowed = (ctx: Ctx) => ctx.clock().getTime() + SYNC_CLOCK_SKEW_MS
+const later = (time: Date | null | undefined, limit: number) => time != null && time.getTime() > limit
 
 /** Collects per-record results: a failing record is recorded and never stops the run. */
 class Run {
@@ -45,6 +55,14 @@ class Run {
       // The record's name is an id; its text (titles) and a failed query's parameters are never logged.
       log.warn("sync record failed", { kind: this.kind, record: name, ...errorFacts(error), code })
     }
+  }
+
+  /** A record refused before any of it was applied: it counts as a failed record. */
+  refuse(name: string, code: string) {
+    this.attempted++
+    this.failed++
+    this.errors.push({ record: name, code })
+    log.warn("sync record refused", { kind: this.kind, record: name, code })
   }
 
   /** The input itself was incomplete (projects the sync tool could not read): at best partial. */
@@ -94,6 +112,19 @@ async function guarded(ctx: Ctx, id: string, run: Run, work: () => Promise<void>
   return finishRun(ctx, id, run)
 }
 
+/**
+ * A snapshot collected later than the server's clock allows is refused whole, and nothing of it is applied. The
+ * run is recorded as failed, in one insert, so the sync status shows the refusal and no run is left open.
+ */
+async function refuseFutureSnapshot(ctx: Ctx, kind: string, collectedAt: Date, limit: number) {
+  if (!later(collectedAt, limit)) return
+  const now = ctx.clock()
+  const errors = [{ record: "snapshot", code: TIME_IN_FUTURE }]
+  await ctx.db.insert(syncRuns).values({ kind, startedAt: now, finishedAt: now, outcome: "failed", counts: {}, errors })
+  log.warn("sync snapshot refused", { kind, code: TIME_IN_FUTURE })
+  throw invalid("collectedAt is later than the server's clock allows.", { field: "collectedAt" })
+}
+
 export type ApplyHooks = {
   /** Test seam: runs after the run read its starting state, before any record is processed. */
   afterLoad?: () => Promise<void>
@@ -106,6 +137,8 @@ export type ApplyHooks = {
  * links, then the per-item status decision. Idempotent; keeps no boundary between runs.
  */
 export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: ApplyHooks = {}): Promise<SyncResult> {
+  const limit = latestAllowed(ctx)
+  await refuseFutureSnapshot(ctx, "t3", snapshot.collectedAt, limit)
   const runId = await startRun(ctx, "t3")
   const run = new Run("t3")
   return guarded(ctx, runId, run, async () => {
@@ -171,9 +204,15 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
     }
 
     // 2. Threads. A child thread never has its own item: its link folds into the top-level thread.
+    // A thread whose times are later than the server's clock allows is refused alone; the tree still counts it.
     const parentOf = new Map(snapshot.threads.map((t) => [t.threadId, t.parentThreadId ?? null]))
-    const byId = new Map(snapshot.threads.map((t) => [t.threadId, t]))
-    for (const thread of snapshot.threads) {
+    const threads = snapshot.threads.filter((t) => {
+      if (!later(t.updatedAt, limit) && !later(t.settledAt, limit)) return true
+      run.refuse(`thread:${t.threadId}`, TIME_IN_FUTURE)
+      return false
+    })
+    const byId = new Map(threads.map((t) => [t.threadId, t]))
+    for (const thread of threads) {
       if (!thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const root = rootThreadId(thread.threadId, parentOf)
@@ -181,7 +220,7 @@ export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: App
       })
     }
 
-    for (const thread of snapshot.threads) {
+    for (const thread of threads) {
       if (thread.parentThreadId) continue
       await run.record(`thread:${thread.threadId}`, async () => {
         const title = ctx.secrets.redact(thread.title).trim()
@@ -368,10 +407,17 @@ async function foldChildLink(
  * project linked to that repository. Families missing from the snapshot keep their last values.
  */
 export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot): Promise<SyncResult> {
+  const limit = latestAllowed(ctx)
+  await refuseFutureSnapshot(ctx, "security", snapshot.collectedAt, limit)
   const runId = await startRun(ctx, "security")
   const run = new Run("security")
   return guarded(ctx, runId, run, async () => {
     for (const repo of snapshot.repos) {
+      // Any time later than the server's clock allows refuses the whole repository record, before any write.
+      if (later(repo.issuesAsOf, limit) || repo.families.some((f) => later(f.asOf, limit))) {
+        run.refuse(`repo:${repo.repo}`, TIME_IN_FUTURE)
+        continue
+      }
       await run.record(`repo:${repo.repo}`, async () => {
         const matches = await ctx.db
           .select({ id: projects.id })
