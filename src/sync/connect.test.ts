@@ -771,6 +771,18 @@ describe("connect: the key Adiutor answers", () => {
     }
   })
 
+  it("leaves the env file as it was when its new text cannot be built", async () => {
+    const file = join(tempDir(), "sync.env")
+    writeFileSync(file, before)
+    // The URL parser drops the line break, so the requests still reach the stand-in; the file must not take it.
+    const adiutor = standIn()
+    const d = deps(adiutor.fetch)
+    expect(await connect(options({ target: "sync", envFile: file, url: `${URL_BASE}\n` }), d)).toBe(1)
+    expect(adiutor.sent.at(-1)?.path).toBe("/revoke-session")
+    expect(d.lines.join("\n")).toContain("could not be saved (ADIUTOR_URL holds a line break)")
+    expect(readFileSync(file, "utf8")).toBe(before)
+  })
+
   it("quotes the key in every line written or printed for a POSIX shell", () => {
     expect(claudeCommand(URL_BASE, KEY, "linux")).toBe(
       `claude mcp add --transport http --scope user adiutor ${URL_BASE}/mcp --header 'Authorization: Bearer ${KEY}'`,
