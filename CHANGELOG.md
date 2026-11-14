@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Failed agent keys limit only the client that sent them**: behind Traefik, ten wrong keys from one client made every agent, the sync and the owner's browser wait a minute on `/api/v1` and `/mcp`. The limit now counts the client address from `X-Forwarded-For` when the connection comes from a proxy in `ADIUTOR_TRUSTED_PROXIES`, and applies only to requests with an `Authorization` header, so the owner's browser session is never limited by failed keys.
 - **The sync keeps a deleted item's threads untracked**: a snapshot that names such a thread as the parent of a linked thread no longer moves that link onto it. The link stays on the child thread, and the run counts it as `childLinksSuppressed`.
 
+### Security
+
+- **Two-factor is set up with an authenticator app only**: `POST /api/auth/two-factor/enable` with a `method` other than `totp` answers `400 TOTP_ONLY`. Sign-in codes sent to Telegram still work at sign-in when the owner turns them on.
+
 ## [0.1.1] - 2026-11-13
 
 ### Fixed

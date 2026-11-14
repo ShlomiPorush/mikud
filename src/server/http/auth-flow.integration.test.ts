@@ -472,6 +472,59 @@ describe("trustDevice is refused on every route whose body accepts it", () => {
   })
 })
 
+describe("enrolment takes the authenticator app only", () => {
+  let botApi: StandInBotApi
+  beforeEach(async () => {
+    botApi = await StandInBotApi.start(testBotToken())
+    build({ telegramApiUrl: botApi.url })
+  })
+  afterEach(async () => {
+    await core.telegramService.stop()
+    await botApi.close()
+  })
+
+  it("refuses Better Auth's OTP method at enable while sign-in codes go to Telegram, and TOTP still enrols", async () => {
+    const b = browser()
+    await b.owner()
+    const saved = await b.call("PATCH", "/api/v1/settings", {
+      body: { telegramBotToken: botApi.token, telegramChatId: "4242", otpViaTelegram: true },
+    })
+    expect(saved.status).toBe(200)
+    // A new authenticator: two-factor is off until the new one is verified, and a password sign-in gets a session.
+    const disabled = await b.call("POST", "/api/auth/two-factor/disable", { body: { password: TEST_PASSWORD } })
+    expect(disabled.status).toBe(200)
+    const other = browser()
+    const signedIn = await other.passwordSignIn()
+    expect([signedIn.status, signedIn.json.twoFactorRedirect]).toEqual([200, undefined])
+    expect((await v1(other)).json.error.code).toBe("totp_required")
+
+    // Any method other than totp is refused, from either browser.
+    const enable = (tab: TestBrowser, method: unknown) =>
+      tab.call("POST", "/api/auth/two-factor/enable", { body: { password: TEST_PASSWORD, method } })
+    for (const [tab, method] of [
+      [other, "otp"],
+      [other, "OTP"],
+      [other, ["otp"]],
+      [other, null],
+      [b, "otp"],
+    ] as const) {
+      const refused = await enable(tab, method)
+      expect([refused.status, refused.json.code]).toEqual([400, "TOTP_ONLY"])
+    }
+    expect((await owner())?.twoFactorEnabled).toBe(false)
+    expect((await v1(other)).json.error.code).toBe("totp_required")
+    expect((await v1(b)).json.error.code).toBe("totp_required")
+    expect(botApi.sent).toHaveLength(0)
+
+    // TOTP, named or by default, still enrols; the flag turns on only with the code.
+    expect((await enable(b, "totp")).status).toBe(200)
+    const { secret } = await b.enable()
+    expect((await owner())?.twoFactorEnabled).toBe(false)
+    expect((await b.verify(totp(secret))).status).toBe(200)
+    expect((await v1(b)).status).toBe(200)
+  })
+})
+
 describe("the allow-list in hooks.before", () => {
   it("answers 404 over HTTP to every route outside the list; server calls still work", async () => {
     const b = browser()
