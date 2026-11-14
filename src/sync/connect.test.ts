@@ -1,5 +1,5 @@
 import { randomBytes, randomInt } from "node:crypto"
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -8,9 +8,11 @@ import {
   AGENT_KEY_DAYS_MIN,
   AGENT_KEY_NAME_MAX,
   CONNECT_CLIENT_ID as SERVER_CLIENT_ID,
+  AGENT_KEY_PREFIX as SERVER_KEY_PREFIX,
 } from "../shared/auth.ts"
 import { connectUrl, DEFAULT_DAYS, main } from "./cli.ts"
 import {
+  AGENT_KEY_PREFIX,
   aclEntries,
   CLAUDE_NAME_TAKEN,
   CLAUDE_REMOVE_ARGS,
@@ -324,8 +326,8 @@ describe("connect: Claude Code", () => {
     const d = deps(standIn().fetch, { runner, findCommand: async () => undefined })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
     expect(ran).toEqual([])
-    const command = `claude mcp add --transport http --scope user adiutor ${URL_BASE}/mcp --header "Authorization: Bearer ${KEY}"`
-    expect(claudeCommand(URL_BASE, KEY)).toBe(command)
+    const command = `claude mcp add --transport http --scope user adiutor ${URL_BASE}/mcp --header 'Authorization: Bearer ${KEY}'`
+    expect(claudeCommand(URL_BASE, KEY, "linux")).toBe(command)
     expect(d.lines.join("\n")).toContain("Could not add Adiutor to Claude Code: the claude command was not found.")
     expect(keyLines(d.lines)).toEqual([command])
     expect(d.lines.join("\n")).toContain("shell history")
@@ -346,7 +348,7 @@ describe("connect: Claude Code", () => {
       expect(await connect(options({ target: "claude" }), d)).toBe(0)
       expect(failed.ran.map((r) => r.args[1])).toEqual(["add"])
       expect(d.lines.join("\n")).toContain("Could not add Adiutor to Claude Code: claude mcp add exit code 1")
-      expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+      expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY, "linux")])
     }
     expect(CLAUDE_NAME_TAKEN.test("MCP server adiutor already exists in user config\r\n")).toBe(true)
     expect(CLAUDE_NAME_TAKEN.test("warning\nMCP server adiutor already exists in user config.\n")).toBe(true)
@@ -358,7 +360,7 @@ describe("connect: Claude Code", () => {
     const failed = scripted([{ code: 1, stdout: "", stderr, error: "exit code 1" }])
     const d = deps(standIn().fetch, { runner: failed.runner, findCommand: async () => CLAUDE })
     expect(await connect(options({ target: "claude" }), d)).toBe(0)
-    const others = d.lines.filter((line) => line !== claudeCommand(URL_BASE, KEY))
+    const others = d.lines.filter((line) => line !== claudeCommand(URL_BASE, KEY, "linux"))
     expect(others.some((line) => line.includes("[redacted]"))).toBe(true)
     expect(others.filter((line) => line.includes(KEY.slice(0, 6)))).toEqual([])
   })
@@ -374,7 +376,7 @@ describe("connect: Claude Code", () => {
       "Could not add Adiutor to Claude Code: claude mcp add exit code 1: bad header Authorization:",
     )
     expect(text).toContain("[redacted]")
-    expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+    expect(keyLines(d.lines)).toEqual([claudeCommand(URL_BASE, KEY, "linux")])
 
     // A command that did not start is not retried, and nothing is removed.
     const unstarted = scripted([{ code: null, stdout: "", stderr: "", error: "could not start (ENOENT)" }])
@@ -382,7 +384,7 @@ describe("connect: Claude Code", () => {
     expect(await connect(options({ target: "claude" }), e)).toBe(0)
     expect(unstarted.ran).toHaveLength(1)
     expect(e.lines.join("\n")).toContain("claude mcp add could not start (ENOENT)")
-    expect(keyLines(e.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+    expect(keyLines(e.lines)).toEqual([claudeCommand(URL_BASE, KEY, "linux")])
 
     // The existing entry was removed, but the new add still fails: the command to run by hand.
     const twice = scripted([exists, { code: 0, stdout: "", stderr: "" }, { ...exists, stderr: "write failed" }])
@@ -390,7 +392,7 @@ describe("connect: Claude Code", () => {
     expect(await connect(options({ target: "claude" }), f)).toBe(0)
     expect(twice.ran.map((r) => r.args[1])).toEqual(["add", "remove", "add"])
     expect(f.lines.join("\n")).toContain("claude mcp add exit code 1: write failed")
-    expect(keyLines(f.lines)).toEqual([claudeCommand(URL_BASE, KEY)])
+    expect(keyLines(f.lines)).toEqual([claudeCommand(URL_BASE, KEY, "linux")])
   })
 })
 
@@ -456,7 +458,7 @@ describe("connect: Codex", () => {
     expect(await connect(options({ target: "codex" }), d)).toBe(0)
     const file = join(config, "adiutor", "codex.env")
     expect(codexEnvFile({ XDG_CONFIG_HOME: config })).toBe(file)
-    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY=${KEY}\n`)
+    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY='${KEY}'\n`)
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(ran).toEqual([{ command: "/opt/bin/codex", args: codexAddArgs(URL_BASE) }])
     expect(d.lines).toContain(`. "${file}"`)
@@ -468,7 +470,7 @@ describe("connect: Codex", () => {
       options({ target: "codex" }),
       deps(standIn().fetch, { env: { XDG_CONFIG_HOME: config }, runner, findCommand: async () => "/opt/bin/codex" }),
     )
-    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY=${KEY}\n`)
+    expect(readFileSync(file, "utf8")).toBe(`export ADIUTOR_AGENT_KEY='${KEY}'\n`)
   })
 
   it("prints the config.toml lines, without the key, when codex is not installed or fails", async () => {
@@ -528,7 +530,7 @@ describe("connect: Codex", () => {
     })
     expect(await connect(options({ target: "codex" }), linux)).toBe(0)
     expect(linux.lines.join("\n")).toContain("Could not set ADIUTOR_AGENT_KEY: cannot write")
-    expect(keyLines(linux.lines)).toEqual([`export ADIUTOR_AGENT_KEY="${KEY}"`])
+    expect(keyLines(linux.lines)).toEqual([`export ADIUTOR_AGENT_KEY='${KEY}'`])
     expect(linux.lines.join("\n")).toContain("Added the adiutor server to Codex")
   })
 })
@@ -670,6 +672,113 @@ describe("connect: the sync's env file", () => {
     expect(defaultEnvFile("linux", { XDG_CONFIG_HOME: "/home/owner/.config" })).toBe(
       "/home/owner/.config/adiutor/sync.env",
     )
+  })
+})
+
+describe("connect: the key Adiutor answers", () => {
+  const letters = "a".repeat(64)
+  // Each holds something a shell or the env file would read as more than a key.
+  const refused = [
+    `${KEY};echo injected`,
+    "adt_x$(id)",
+    `adt_${letters}\nT3CODE_CLI_PATH=/tmp/program`,
+    `adt_${letters}\r`,
+    `adt_~${letters}`,
+    `adt_${letters}'`,
+    `adt_${letters} `,
+    `adt_${letters}\u2028`,
+    `adt_${"a".repeat(31)}`,
+    `adt_${"a".repeat(257)}`,
+    letters,
+    "adt_short",
+    "",
+    // Not a string, or missing.
+    null,
+    42,
+    [KEY],
+    { key: KEY },
+    undefined,
+  ]
+  const refusal =
+    'connect: Adiutor created the key "claude-laptop", but its answer is not a valid agent key, so nothing was ' +
+    "saved. Disconnect it in Adiutor, Settings, Agent access."
+  const before = `# the sync\nT3CODE_CLI_PATH=C:\\t3\\t3.cmd\nADIUTOR_URL=${URL_BASE}\nADIUTOR_AGENT_TOKEN=old\n`
+
+  it("refuses a key that is not an agent key before saving, printing or passing it on, and still ends the session", async () => {
+    for (const bad of refused)
+      for (const [target, platform] of [
+        ["sync", "linux"],
+        ["claude", "linux"],
+        ["claude", "win32"],
+        ["codex", "linux"],
+        ["codex", "win32"],
+      ] as const) {
+        const config = tempDir()
+        const envFile = join(config, "sync.env")
+        writeFileSync(envFile, before)
+        const adiutor = standIn({
+          create: { status: 200, body: { key: bad, id: "k1", expiresAt: "2027-01-31T08:00:00.000Z" } },
+        })
+        const ran: string[] = []
+        const d = deps(adiutor.fetch, {
+          platform,
+          env: { XDG_CONFIG_HOME: config },
+          findCommand: async (name) => `/opt/bin/${name}`,
+          runner: async (command) => {
+            ran.push(command)
+            return { code: 0, stdout: "", stderr: "" }
+          },
+        })
+        expect(await connect(options({ target, envFile }), d)).toBe(1)
+        expect(adiutor.sent.at(-1)?.path).toBe("/revoke-session")
+        expect(ran).toEqual([])
+        const text = d.lines.join("\n")
+        expect(text).toContain(refusal)
+        if (typeof bad === "string")
+          for (const part of bad.split(/[\r\n\u2028]/).filter(Boolean)) expect(text).not.toContain(part)
+        expect(text).not.toContain(KEY)
+        expect(readFileSync(envFile, "utf8")).toBe(before)
+        expect(existsSync(join(config, "adiutor", "codex.env"))).toBe(false)
+      }
+  })
+
+  it("says nothing was created when Adiutor refuses, as before", async () => {
+    const adiutor = standIn({ create: { status: 403, body: { code: "FORBIDDEN", key: "adt_x$(id)" } } })
+    const d = deps(adiutor.fetch)
+    expect(await connect(options({ target: "claude" }), d)).toBe(1)
+    expect(d.lines.join("\n")).toContain("connect: Adiutor did not create the key: HTTP 403, FORBIDDEN")
+    expect(d.lines.join("\n")).not.toContain("$(id)")
+  })
+
+  it("accepts an agent key of letters and digits, from 32 to 256 after the prefix", async () => {
+    for (const key of [
+      `adt_${randomBytes(48).toString("hex")}`,
+      `adt_${randomBytes(16).toString("hex")}`,
+      `adt_${randomBytes(128).toString("hex")}`,
+    ]) {
+      const file = join(tempDir(), "sync.env")
+      const adiutor = standIn({ create: { status: 200, body: { key, expiresAt: "2027-01-31T08:00:00.000Z" } } })
+      expect(await connect(options({ target: "sync", envFile: file }), deps(adiutor.fetch))).toBe(0)
+      expect(parseEnvFile(readFileSync(file, "utf8")).ADIUTOR_AGENT_TOKEN).toBe(key)
+    }
+    expect(AGENT_KEY_PREFIX).toBe(SERVER_KEY_PREFIX)
+  })
+
+  it("never writes a line break into the sync's env file", () => {
+    for (const value of [`${KEY}\nT3CODE_CLI_PATH=/tmp/program`, `${KEY}\r`, "\n"]) {
+      expect(() => withSyncKey("", URL_BASE, value)).toThrow("ADIUTOR_AGENT_TOKEN holds a line break")
+      expect(() => withSyncKey("", `${URL_BASE}${value}`, KEY)).toThrow("ADIUTOR_URL holds a line break")
+    }
+  })
+
+  it("quotes the key in every line written or printed for a POSIX shell", () => {
+    expect(claudeCommand(URL_BASE, KEY, "linux")).toBe(
+      `claude mcp add --transport http --scope user adiutor ${URL_BASE}/mcp --header 'Authorization: Bearer ${KEY}'`,
+    )
+    expect(claudeCommand(URL_BASE, KEY, "darwin")).toContain(`--header 'Authorization: Bearer ${KEY}'`)
+    expect(claudeCommand(URL_BASE, KEY, "win32")).toContain(`--header "Authorization: Bearer ${KEY}"`)
+    expect(codexVariableLine(KEY, "linux")).toBe(`export ADIUTOR_AGENT_KEY='${KEY}'`)
+    expect(codexVariableLine(KEY, "win32")).toBe(`setx ADIUTOR_AGENT_KEY "${KEY}"`)
   })
 })
 
