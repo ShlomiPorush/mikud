@@ -256,6 +256,8 @@ export type AuditEntry = {
   before: Record<string, unknown> | null
   after: Record<string, unknown> | null
   source: AuditSource
+  /** A reader other than the owner: the fields that changed, on a settings or suppression row without before and after. */
+  redactedFields?: string[]
 }
 
 /** The facet counts of the activity log's first page (docs/api.md, Audit filters). */

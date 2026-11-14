@@ -367,9 +367,9 @@ describe("notes on the overview and in the activity log", () => {
     const note = await createNote(t.ctx, agent, { title: "Moving", projectId: first.id })
     await updateNote(t.ctx, agent, note.id, 1, { body: "Edited" })
     const listed = async (projectId: string) =>
-      (await auditLog(t.ctx, { projectId })).data.filter((row) => row.entityType === "note").length
+      (await auditLog(t.ctx, owner, { projectId })).data.filter((row) => row.entityType === "note").length
     const facet = async (projectId: string) =>
-      (await auditLog(t.ctx, {})).counts?.projects.find((p) => p.projectId === projectId)?.count ?? 0
+      (await auditLog(t.ctx, owner, {})).counts?.projects.find((p) => p.projectId === projectId)?.count ?? 0
     expect(await listed(first.id)).toBe(2)
     expect(await facet(first.id)).toBe(1 + 2) // the project's own create row and the note's two rows
     await updateNote(t.ctx, owner, note.id, 2, { projectId: second.id })
