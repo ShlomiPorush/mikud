@@ -250,6 +250,14 @@ export function createAuth(options: AuthOptions) {
       if (path === "/api-key/create") {
         if (body.prefix !== undefined && body.prefix !== AGENT_KEY_PREFIX)
           throw refuse("BAD_REQUEST", "INVALID_KEY_PREFIX", `Agent keys start with ${AGENT_KEY_PREFIX}.`)
+        // The plugin applies keyExpiration's bounds only to an expiresIn it is given, and stores a key without one
+        // with no end. Every key a request creates names its end, so the bounds always apply.
+        if (http && typeof body.expiresIn !== "number")
+          throw refuse(
+            "BAD_REQUEST",
+            "EXPIRES_IN_REQUIRED",
+            `Agent keys end after ${AGENT_KEY_DAYS_MIN} to ${AGENT_KEY_DAYS_MAX} days: send expiresIn in seconds.`,
+          )
         await audit(by, "api_key.create", "api_key", {
           name: typeof body.name === "string" ? body.name.slice(0, AGENT_KEY_NAME_MAX) : null,
           ...(typeof body.expiresIn === "number" ? { expiresIn: body.expiresIn } : {}),

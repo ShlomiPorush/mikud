@@ -688,7 +688,9 @@ describe("audit rows from the documented hooks, and their refusals", () => {
     await acceptAudit()
 
     await refuseAudit("api_key.create")
-    expect((await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync" } })).status).toBe(500)
+    expect(
+      (await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync", expiresIn: 30 * 86_400 } })).status,
+    ).toBe(500)
     expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
   })
 
@@ -851,10 +853,12 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
   it("creates adt_ keys from a signed-in browser with two-factor, refuses another prefix, revokes by deleting", async () => {
     const b = browser()
     await b.owner()
-    const created = await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync" } })
+    const created = await b.call("POST", "/api/auth/api-key/create", { body: { name: "sync", expiresIn: 30 * 86_400 } })
     expect(created.status).toBe(200)
     expect(created.json.key).toMatch(/^adt_[A-Za-z]{64}$/)
-    const prefixed = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", prefix: "xyz_" } })
+    const prefixed = await b.call("POST", "/api/auth/api-key/create", {
+      body: { name: "x", prefix: "xyz_", expiresIn: 30 * 86_400 },
+    })
     expect([prefixed.status, prefixed.json.code]).toEqual([400, "INVALID_KEY_PREFIX"])
     const [stored] = await t.ctx.db.select().from(authApiKey)
     expect(stored?.key).not.toBe(created.json.key)
@@ -883,6 +887,28 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
     expect((await actions()).filter((a) => a.startsWith("api_key."))).toEqual(["api_key.create", "api_key.delete"])
   })
 
+  it("refuses a key without an end in days: no expiresIn, null or a string, and the plugin's 1 to 365 days", async () => {
+    const b = browser()
+    await b.owner()
+    for (const body of [{ name: "none" }, { name: "null", expiresIn: null }, { name: "text", expiresIn: "86400" }]) {
+      const refused = await b.call("POST", "/api/auth/api-key/create", { body })
+      expect([body.name, refused.status, refused.json.code]).toEqual([body.name, 400, "EXPIRES_IN_REQUIRED"])
+    }
+    const tooLong = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn: 366 * 86_400 } })
+    expect([tooLong.status, tooLong.json.code]).toEqual([400, "EXPIRES_IN_IS_TOO_LARGE"])
+    const tooShort = await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn: 3600 } })
+    expect([tooShort.status, tooShort.json.code]).toEqual([400, "EXPIRES_IN_IS_TOO_SMALL"])
+    // The plugin checks the range only for a truthy number; its body schema refuses zero and less.
+    for (const expiresIn of [0, -86_400])
+      expect((await b.call("POST", "/api/auth/api-key/create", { body: { name: "x", expiresIn } })).status).toBe(400)
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
+
+    const longest = await b.call("POST", "/api/auth/api-key/create", { body: { name: "y", expiresIn: 365 * 86_400 } })
+    expect(longest.status).toBe(200)
+    const [stored] = await t.ctx.db.select().from(authApiKey)
+    expect(Math.abs((stored?.expiresAt?.getTime() ?? 0) - (Date.now() + 365 * DAY))).toBeLessThan(60_000)
+  })
+
   it("never lets a session stand in for a key: MCP and sync pushes refuse a cookie", async () => {
     const b = browser()
     await b.owner()
@@ -900,12 +926,16 @@ describe("agent keys (Better Auth's api-key plugin)", () => {
     await setupTab.setup()
     const early = browser()
     await early.passwordSignIn()
-    const refused = await early.call("POST", "/api/auth/api-key/create", { body: { name: "early" } })
+    const refused = await early.call("POST", "/api/auth/api-key/create", {
+      body: { name: "early", expiresIn: 30 * 86_400 },
+    })
     expect([refused.status, refused.json.code]).toEqual([403, "TOTP_REQUIRED"])
     const { secret } = await setupTab.enable()
     await setupTab.verify(totp(secret))
     // The setup page's revokeOtherSessions did not run (G7(b)): the old session now passes the account check.
-    const later = await early.call("POST", "/api/auth/api-key/create", { body: { name: "early" } })
+    const later = await early.call("POST", "/api/auth/api-key/create", {
+      body: { name: "early", expiresIn: 30 * 86_400 },
+    })
     expect(later.status).toBe(200)
     // A key outlives "Sign out everywhere".
     await setupTab.call("POST", "/api/auth/revoke-sessions", { body: {} })
