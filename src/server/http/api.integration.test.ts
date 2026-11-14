@@ -4,7 +4,7 @@ import { VISIT_SAFETY_MARGIN_MS } from "../db/client.ts"
 import { createAgentKey, type TestCore, testCore } from "../testing/app.ts"
 import { TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
-import { RateLimiter } from "./auth.ts"
+import { clientAddress, RateLimiter } from "./auth.ts"
 
 const ORIGIN = "http://127.0.0.1:8090"
 
@@ -136,19 +136,85 @@ describe("authentication", () => {
     expect((await call(`/items/${item.json.data.id}`, { token: AGENT })).status).toBe(200)
   })
 
-  it("rate-limits failed token attempts per client", async () => {
+  it("rate-limits failed keys per client, and only keys", async () => {
+    const attacker = { "x-test-ip": "attacker" }
     for (let i = 0; i < 10; i++)
-      expect((await call("/projects", { token: "wrong", headers: { "x-test-ip": "attacker" } })).status).toBe(401)
-    const blocked = await call("/projects", { owner: true, headers: { "x-test-ip": "attacker" } })
+      expect((await call("/projects", { token: "wrong", headers: attacker })).status).toBe(401)
+    const blocked = await call("/projects", { token: "wrong", headers: attacker })
     expect(blocked.status).toBe(429)
     expect(blocked.json.error.code).toBe("rate_limited")
+    // The limit applies before the key is checked: a valid key from the blocked client waits too.
+    expect((await call("/projects", { token: AGENT, headers: attacker })).status).toBe(429)
     // A forged forwarding header is not the address: the count stays.
     const forged = await call("/projects", {
-      owner: true,
-      headers: { "x-test-ip": "attacker", "x-forwarded-for": "198.51.100.7" },
+      token: AGENT,
+      headers: { ...attacker, "x-forwarded-for": "198.51.100.7" },
     })
     expect(forged.status).toBe(429)
-    expect((await call("/projects", { owner: true, headers: { "x-test-ip": "someone-else" } })).status).toBe(200)
+    expect((await call("/projects", { token: AGENT, headers: { "x-test-ip": "someone-else" } })).status).toBe(200)
+    // The owner's browser session is never limited by failed keys, not even from the blocked client.
+    expect((await call("/projects", { owner: true, headers: attacker })).status).toBe(200)
+  })
+
+  it("keeps the owner's session usable after ten wrong keys from the same address", async () => {
+    // Every request has the same address, as behind a reverse proxy without ADIUTOR_TRUSTED_PROXIES.
+    for (let i = 0; i < 10; i++) expect((await call("/projects", { token: "wrong" })).status).toBe(401)
+    expect((await call("/projects", { token: AGENT })).status).toBe(429)
+    expect((await call("/projects", { owner: true })).status).toBe(200)
+    const created = await call("/projects", { method: "POST", owner: true, body: { name: "Still mine" } })
+    expect(created.status).toBe(201)
+    // A request without credentials is refused as before, and does not count.
+    expect((await call("/projects")).status).toBe(401)
+  })
+
+  it("applies one address's failed keys to MCP too, which still refuses a session", async () => {
+    const mcp = (headers: Record<string, string>) =>
+      app.request("/mcp", {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      })
+    expect((await mcp({ authorization: `Bearer ${AGENT}` })).status).toBe(200)
+    for (let i = 0; i < 10; i++) expect((await call("/projects", { token: "wrong" })).status).toBe(401)
+    expect((await mcp({ authorization: `Bearer ${AGENT}` })).status).toBe(429)
+    expect((await mcp({ cookie: ownerBrowser.cookieHeader, ...browser })).status).toBe(401)
+  })
+})
+
+describe("the failed-key limit behind a reverse proxy", () => {
+  const PROXY = "192.0.2.10"
+  /** An app whose socket peer comes from x-test-peer, with 192.0.2.0/24 as ADIUTOR_TRUSTED_PROXIES. */
+  function behindProxy() {
+    return createApp({
+      checkDatabase: async () => true,
+      core: {
+        ...core,
+        limiter: new RateLimiter(10, 60_000),
+        clientIp: clientAddress(["192.0.2.0/24"], (c) => c.req.header("x-test-peer") ?? "unknown"),
+      },
+    })
+  }
+  async function v1(proxied: ReturnType<typeof createApp>, token: string, peer: string, forwardedFor: string) {
+    const res = await proxied.request("/api/v1/projects", {
+      headers: { authorization: `Bearer ${token}`, "x-test-peer": peer, "x-forwarded-for": forwardedFor },
+    })
+    return res.status
+  }
+
+  it("gives two clients behind a trusted proxy their own buckets", async () => {
+    const proxied = behindProxy()
+    for (let i = 0; i < 10; i++) expect(await v1(proxied, "wrong", PROXY, "203.0.113.5")).toBe(401)
+    expect(await v1(proxied, AGENT, PROXY, "203.0.113.5")).toBe(429)
+    // A client's own leftmost entry does not move it to another bucket.
+    expect(await v1(proxied, AGENT, PROXY, "198.51.100.9, 203.0.113.5")).toBe(429)
+    expect(await v1(proxied, AGENT, PROXY, "203.0.113.6")).toBe(200)
+  })
+
+  it("ignores the X-Forwarded-For of a peer that is not a trusted proxy", async () => {
+    const proxied = behindProxy()
+    for (let i = 0; i < 10; i++) expect(await v1(proxied, "wrong", "198.51.100.20", `203.0.113.${i + 1}`)).toBe(401)
+    expect(await v1(proxied, AGENT, "198.51.100.20", "203.0.113.99")).toBe(429)
+    expect(await v1(proxied, AGENT, "198.51.100.21", "203.0.113.99")).toBe(200)
   })
 })
 

@@ -2,10 +2,11 @@ import { existsSync, writeSync } from "node:fs"
 import type { Server } from "node:http"
 import { join } from "node:path"
 import { serve } from "@hono/node-server"
-import { createApp } from "./app.ts"
+import { createApp, socketAddress } from "./app.ts"
 import { AuthHolder } from "./auth/auth.ts"
 import { ConfigError, loadConfig } from "./config.ts"
 import { createDatabase, migrationFailure } from "./db/client.ts"
+import { clientAddress } from "./http/auth.ts"
 import { errorFacts, log } from "./log.ts"
 import { getSettings } from "./services/admin.ts"
 import { ReloadableSecretScanner } from "./services/secrets.ts"
@@ -73,7 +74,14 @@ const webRoot = process.env.ADIUTOR_WEB_DIR ?? "dist/web"
 const web = existsSync(join(webRoot, "index.html")) ? { root: webRoot } : undefined
 const app = createApp({
   checkDatabase: database.ping,
-  core: { ctx, config, auth, settings: runtime, telegram },
+  core: {
+    ctx,
+    config,
+    auth,
+    settings: runtime,
+    telegram,
+    clientIp: clientAddress(config.trustedProxies, socketAddress),
+  },
   web,
 })
 

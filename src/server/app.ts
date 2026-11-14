@@ -25,8 +25,9 @@ export type AppDeps = {
     auth: AuthHolder
     /** The owner's settings that the environment may set, and how a save takes effect. */
     settings: SettingsHandle
-    /** Failed agent keys: 10 a minute per address. */
+    /** Failed agent keys: 10 a minute per client address. */
     limiter?: RateLimiter
+    /** The client's address for that limit; the socket's address when absent (index.ts passes clientAddress). */
     clientIp?: (c: Context) => string
     /** The bot, for the status route; off when absent. */
     telegram?: TelegramRuntime
@@ -35,8 +36,8 @@ export type AppDeps = {
   web?: { root: string }
 }
 
-/** The socket's address: the key of Adiutor's own limit on failed agent keys (Better Auth limits its own routes). */
-function socketAddress(c: Context): string {
+/** The socket's address: the peer that clientAddress (http/auth.ts) trusts as a proxy or keys the limit by. */
+export function socketAddress(c: Context): string {
   try {
     return getConnInfo(c).remote.address ?? "unknown"
   } catch {

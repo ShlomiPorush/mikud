@@ -90,7 +90,7 @@ Adiutor must be reachable only over your NetBird network. The shipped `docker-co
 - Adiutor is reachable only through Traefik: the Compose file publishes no port, and `adiutor` is only on the `traefik` network. A database network added in step 1 lets that network's containers reach `adiutor` directly as well.
 - Traefik replaces the forwarding headers clients send: do not set `forwardedHeaders.insecure` or `forwardedHeaders.trustedIPs` on the entry point Adiutor uses.
 
-Without `ADIUTOR_TRUSTED_PROXIES`, every request shares one bucket, which fails safe for one owner. Two-factor also locks sign-in for 15 minutes after 10 wrong codes. Adiutor's own limit of 10 failed agent keys a minute counts by connection address.
+Without `ADIUTOR_TRUSTED_PROXIES`, every request shares one bucket, which fails safe for one owner. Two-factor also locks sign-in for 15 minutes after 10 wrong codes. Adiutor's own limit of 10 failed agent keys a minute counts per client address too: `X-Forwarded-For` counts only when the connection comes from a proxy in `ADIUTOR_TRUSTED_PROXIES`, and otherwise the connection's address does. Without the setting, every agent and the sync behind Traefik share one count, so ten wrong keys from any of them make the others wait a minute; the owner's browser is never limited by failed keys.
 
 ## 4. Start and check
 

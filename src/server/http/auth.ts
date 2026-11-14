@@ -1,3 +1,4 @@
+import { getIP } from "better-auth/api"
 import type { Context } from "hono"
 import { createMiddleware } from "hono/factory"
 import type { AuthHolder } from "../auth/auth.ts"
@@ -59,6 +60,31 @@ export class RateLimiter {
   }
 }
 
+/**
+ * The client's address for the failed-key limit. `X-Forwarded-For` counts only when the socket peer is one of the
+ * trusted proxies (ADIUTOR_TRUSTED_PROXIES); every other request is the socket peer itself. Both questions go to
+ * Better Auth's own resolver (`getIP`, with the options its limiter has), so a proxy entry means the same here as in
+ * Better Auth's limits, and the forwarded address is the first untrusted hop from the right, never the leftmost one.
+ * A header Better Auth cannot read falls back to the peer in production: one shared bucket, as without a proxy
+ * setting (under NODE_ENV test or development Better Auth answers 127.0.0.1 instead, also one shared bucket).
+ */
+export function clientAddress(trustedProxies: string[], peer: (c: Context) => string): (c: Context) => string {
+  const header = "x-forwarded-for"
+  const resolve = (value: string, proxies: string[]) =>
+    getIP(new Headers({ [header]: value }), {
+      advanced: { ipAddress: { ipAddressHeaders: [header], trustedProxies: proxies } },
+    })
+  return (c) => {
+    const address = peer(c)
+    const forwarded = c.req.header(header)
+    if (trustedProxies.length === 0 || forwarded === undefined) return address
+    // The peer is trusted when the proxy list strips it as a hop: the answer then differs from the peer read alone
+    // (null in production; Better Auth's test and development fallback, 127.0.0.1, under NODE_ENV test or development).
+    if (resolve(address, trustedProxies) === resolve(address, [])) return address
+    return resolve(forwarded, trustedProxies) ?? address
+  }
+}
+
 const rateLimited = () => new AppError("rate_limited", "Too many failed attempts. Wait a minute and try again.")
 const unauthorized = (message = "Sign in, or send a valid key.") => new AppError("unauthorized", message)
 
@@ -94,14 +120,16 @@ function agentLabel(c: Context): string {
  * getSession, which never extends it: deferSessionRefresh). A request with an Authorization header is an agent
  * request: a wrong key is refused, never read as the cookie's session. Better Auth has no option that requires two-factor, so a session counts only when
  * the account has two-factor on; otherwise the answer is `totp_required` and the UI shows enrolment. A key never
- * becomes a session and a session never stands in for a key. Failed keys count toward the rate limit.
+ * becomes a session and a session never stands in for a key. Failed keys count toward the rate limit of the client's
+ * address, which only requests with an Authorization header meet.
  */
 export function authenticate(deps: AuthDeps, options: { allowSession: boolean }) {
   return createMiddleware<Env>(async (c, next) => {
-    const ip = deps.clientIp(c)
-    if (deps.limiter.blocked(ip)) throw rateLimited()
     const header = c.req.header("authorization")
     if (header !== undefined) {
+      // Only agent requests meet the failed-key limit: a browser session never counts toward it or waits for it.
+      const ip = deps.clientIp(c)
+      if (deps.limiter.blocked(ip)) throw rateLimited()
       const match = /^Bearer\s+(\S+)\s*$/i.exec(header)
       const result = match?.[1] ? await deps.auth.current.api.verifyApiKey({ body: { key: match[1] } }) : null
       if (!result?.valid || !result.key) {

@@ -3,11 +3,11 @@ import { request as httpRequest } from "node:http"
 import { type AddressInfo, connect } from "node:net"
 import { type ServerType, serve } from "@hono/node-server"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
-import { createApp } from "../app.ts"
+import { createApp, socketAddress } from "../app.ts"
 import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
 import { TEST_ORIGIN, TestBrowser } from "../testing/browser.ts"
 import { createTestDatabase, type TestDatabase } from "../testing/db.ts"
-import { RateLimiter } from "./auth.ts"
+import { clientAddress, RateLimiter } from "./auth.ts"
 
 // Requests that routers, adapters and middleware have handled differently from the application: every one must still
 // meet the authentication of /api/v1 and /mcp, or be refused before the app sees it, at a bounded cost.
@@ -21,7 +21,7 @@ let port: number
 let reached = 0
 
 /** The app behind a real @hono/node-server listener on 127.0.0.1, as production runs it. */
-async function listen(fetch: (request: Request) => Response | Promise<Response>): Promise<ServerType> {
+async function listen(fetch: (request: Request, env: unknown) => Response | Promise<Response>): Promise<ServerType> {
   const listener = serve({ fetch, port: 0, hostname: "127.0.0.1" })
   await new Promise<void>((resolve) => listener.once("listening", () => resolve()))
   return listener
@@ -81,9 +81,10 @@ function rawGet(
   path: string,
   headers: Record<string, string> = {},
   target = port,
+  localAddress?: string,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: "127.0.0.1", port: target, path, method: "GET", headers }, (res) => {
+    const req = httpRequest({ host: "127.0.0.1", port: target, path, method: "GET", headers, localAddress }, (res) => {
       let body = ""
       res.setEncoding("utf8")
       res.on("data", (chunk: string) => {
@@ -220,30 +221,46 @@ describe("credentials are checked before the body is read", () => {
     expect(res).toMatchObject({ status: 401, json: { error: { code: "unauthorized" } }, stillSending: true })
   })
 
-  it("answers 429 at once after the failed-key limit, before reading the body", async () => {
-    // A separate app with the real limit of 10 failed keys a minute per address.
+  it("answers a key 429 at once after the failed-key limit, before reading the body", async () => {
+    // A separate app with the real limit of 10 failed keys a minute per address, keyed as production keys it: the
+    // socket's address, or X-Forwarded-For when that peer is a trusted proxy (here a second loopback address).
+    const proxy = [127, 0, 0, 2].join(".")
     const limited = createApp({
       checkDatabase: async () => true,
-      core: { ...core, limiter: new RateLimiter(10, 60_000) },
+      core: { ...core, limiter: new RateLimiter(10, 60_000), clientIp: clientAddress([proxy], socketAddress) },
     })
-    const listener = await listen((request) => limited.fetch(request))
+    const listener = await listen(limited.fetch)
+    const wrongKey = () => ({ authorization: `Bearer ${randomBytes(24).toString("base64url")}` })
     try {
       const target = (listener.address() as AddressInfo).port
+      // From 127.0.0.1, not a trusted proxy: its X-Forwarded-For is ignored, so every one counts for 127.0.0.1.
       for (let i = 0; i < 10; i++) {
         const wrong = await rawGet(
           "/api/v1/session",
-          { authorization: `Bearer ${randomBytes(24).toString("base64url")}` },
+          { ...wrongKey(), "x-forwarded-for": `203.0.113.${i + 1}` },
           target,
         )
         expect(wrong.status).toBe(401)
       }
       for (const path of routes) {
-        const res = await openPost(path, { chunks: someChunks(), target })
+        const res = await openPost(path, { headers: wrongKey(), chunks: someChunks(), target })
         expect([path, res]).toMatchObject([
           path,
           { status: 429, json: { error: { code: "rate_limited" } }, stillSending: true },
         ])
+        // Without credentials the limit does not apply: 401, still before the body is read.
+        const anonymous = await openPost(path, { chunks: someChunks(), target })
+        expect([path, anonymous]).toMatchObject([
+          path,
+          { status: 401, json: { error: { code: "unauthorized" } }, stillSending: true },
+        ])
       }
+      // Through the trusted proxy, each client in X-Forwarded-For has its own bucket.
+      const proxied = async (client: string) =>
+        (await rawGet("/api/v1/session", { ...wrongKey(), "x-forwarded-for": client }, target, proxy)).status
+      for (let i = 0; i < 10; i++) expect(await proxied("203.0.113.1")).toBe(401)
+      expect(await proxied("203.0.113.1")).toBe(429)
+      expect(await proxied("203.0.113.2")).toBe(401)
     } finally {
       await close(listener)
     }
