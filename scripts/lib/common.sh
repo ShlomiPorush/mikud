@@ -87,17 +87,22 @@ check_non_root() {
   done
 }
 
-# Fails unless the Adiutor container holds no capability, cannot gain privileges and has a read-only root.
+# Fails unless each given service (default: adiutor) holds no capability, cannot gain privileges and has a
+# read-only root.
 check_hardening() {
-  local project="$1" cid
-  cid="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=adiutor")"
-  [ -n "$cid" ] || die "service adiutor is not running"
-  [ "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$cid")" = '["ALL"] null' ] ||
-    die "adiutor holds capabilities"
-  [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$cid")" = true ] || die "adiutor has a writable root file system"
-  docker inspect -f '{{range .HostConfig.SecurityOpt}}{{println .}}{{end}}' "$cid" | grep -qxE 'no-new-privileges(:true)?' ||
-    die "adiutor may gain new privileges"
-  echo "    adiutor holds no capabilities, read-only root, no new privileges"
+  local project="$1" service cid
+  shift
+  [ $# -gt 0 ] || set -- adiutor
+  for service in "$@"; do
+    cid="$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service")"
+    [ -n "$cid" ] || die "service $service is not running"
+    [ "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$cid")" = '["ALL"] null' ] ||
+      die "$service holds capabilities"
+    [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$cid")" = true ] || die "$service has a writable root file system"
+    docker inspect -f '{{range .HostConfig.SecurityOpt}}{{println .}}{{end}}' "$cid" | grep -qxE 'no-new-privileges(:true)?' ||
+      die "$service may gain new privileges"
+    echo "    $service holds no capabilities, read-only root, no new privileges"
+  done
 }
 
 # Refuses a data directory on the Windows file system: development and test data live on Linux.
