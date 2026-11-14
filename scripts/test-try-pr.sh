@@ -48,6 +48,9 @@ mkdir -p "$STATE_DIR"
 PR=7 COMMIT=0123456789abcdef REF=refs/adiutor/try-pr/7 PORT=18091 IMAGE=adiutor:pr-7
 
 host_of() { sed -E 's#^[a-z]+://([^/:]+).*#\1#' <<<"$1"; }
+# Succeed when the text $2 holds, or lacks, the fixed string $1.
+holds() { grep -qF -- "$1" <<<"$2"; }
+lacks() { ! grep -qF -- "$1" <<<"$2"; }
 
 # --- the address ---
 
@@ -75,14 +78,13 @@ check "the seed's origin is the public address" seed_origin
 (write_compose) || echo "      write_compose failed"
 # Prints the lines of one top-level service of the generated Compose file.
 service() { awk -v name="  $1:" '$0 == name { on = 1; next } /^  [a-z]+:$/ { on = 0 } on' "$COMPOSE_FILE"; }
-check "the pull request's server publishes no port" bash -c '! grep -q "ports:" <<<"$1"' _ "$(service adiutor)"
+check "the pull request's server publishes no port" lacks "ports:" "$(service adiutor)"
 check "only the proxy publishes a port, on 127.0.0.1" \
   test "$(grep -c '^      - "127.0.0.1:' "$COMPOSE_FILE")" = 1 -a -n "$(service proxy | grep -Fx "      - \"127.0.0.1:$PORT:8080\"")"
-check "the proxy is healthy only when it serves the pull request's host" \
-  bash -c 'grep -qF "\"Host: $2\"" <<<"$1"' _ "$(service proxy)" "$PR_HOST"
-check "the proxy runs read-only without capabilities as UID 101" bash -c '
-  grep -qx "    read_only: true" <<<"$1" && grep -qx "      - ALL" <<<"$1" && grep -qx "    user: \"101:101\"" <<<"$1"' _ \
-  "$(service proxy)"
+check "the proxy is healthy only when it serves the pull request's host" holds "\"Host: $PR_HOST\"" "$(service proxy)"
+check "the proxy has a read-only root" holds "    read_only: true" "$(service proxy)"
+check "the proxy holds no capabilities" holds "      - ALL" "$(service proxy)"
+check "the proxy runs as UID 101" holds '    user: "101:101"' "$(service proxy)"
 
 (write_proxy_conf) || echo "      write_proxy_conf failed"
 check "any other host gets 421" grep -Pzq 'listen 8080 default_server;\n\s*return 421;' "$PROXY_CONF"
@@ -98,12 +100,12 @@ rm -f "$ENV_FILE" "$COMPOSE_FILE" "$PROXY_CONF"
 save_state
 out="$(status_out)"
 check "status of an unfinished start asks for restore" grep -q "setup did not finish" <<<"$out"
-check "status of an unfinished start shows no address" bash -c '! grep -q "http://" <<<"$1"' _ "$out"
+check "status of an unfinished start shows no address" lacks "http://" "$out"
 
 (write_env)
 out="$(status_out)"
 check "status before the stack was written shows the address" grep -qF "on $public_url" <<<"$out"
-check "status before the stack was written does not call it older" bash -c '! grep -q "older" <<<"$1"' _ "$out"
+check "status before the stack was written does not call it older" lacks "older" "$out"
 
 sed -i "s#^ADIUTOR_PUBLIC_URL=.*#ADIUTOR_PUBLIC_URL=http://127.0.0.1:$PORT#" "$ENV_FILE"
 out="$(status_out)"
