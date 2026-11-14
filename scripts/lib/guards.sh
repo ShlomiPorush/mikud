@@ -176,4 +176,7 @@ bash scripts/test-ci-result.sh || fail=1
 echo "--- Release workflow: jobs and steps on both CI paths, with and without dry_run"
 bash scripts/test-release-workflow.sh || fail=1
 
+echo "--- Pull request stack: its address, what it publishes and its status, without Docker"
+bash scripts/test-try-pr.sh || fail=1
+
 exit "$fail"

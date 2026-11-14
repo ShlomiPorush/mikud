@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - **`adiutor-sync connect` checks the key it receives**: it uses the key only when it is `adt_` followed by letters and digits. Anything else in a successful answer is neither saved, printed nor passed to Claude Code, Codex or `setx`, and `connect` exits 1 and asks to disconnect that key in Settings, Agent access. The `codex.env` line and the printed `export` and `claude mcp add` lines hold the key in single quotes outside Windows, and the sync's env file never takes a value with a line break.
+- **Pull request stacks on their own address**: `scripts/try-pr.sh` serves a pull request on `http://pr.localhost:8091` instead of `http://127.0.0.1:8091`, through a proxy that answers only that name, so the browser keeps the development stack's sign-in away from the pull request's code. A stack started before this change keeps its old address; `status` says so, and `restore` then a new run moves it. Agent tools accept plain http only for `localhost` and `127.0.0.1`, so they cannot connect to a pull request stack; call its API with the agent key in `owner.env` (curl and browsers find `pr.localhost`).
 
 ### Fixed
 
