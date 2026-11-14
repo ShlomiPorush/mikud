@@ -145,10 +145,20 @@ describe("activity counts", () => {
 
   it("lists rows written for an id in capitals, as an address may name it, under the item and its project", async () => {
     const { lantern, trellis } = await seed()
-    // PATCH /items/<ID IN CAPITALS> is a valid request; its audit row keeps the id as the request named it.
+    // PATCH /items/<ID IN CAPITALS> is a valid request; its audit row holds the item's own id, in lower case.
     await updateItem(t.ctx, owner, trellis.id.toUpperCase(), await version(trellis.id), { status: "done" })
     const [written] = await t.ctx.db.select({ entityId: audit.entityId }).from(audit).orderBy(desc(audit.id)).limit(1)
-    expect(written?.entityId).toBe(trellis.id.toUpperCase())
+    expect(written?.entityId).toBe(trellis.id)
+    // A row written before that kept the id as the request named it.
+    await t.ctx.db.insert(audit).values({
+      at: t.ctx.clock(),
+      actorKind: "owner",
+      actorLabel: "owner",
+      action: "item.update",
+      entityType: "item",
+      entityId: trellis.id.toUpperCase(),
+      source: "ui",
+    })
     const done = (row: { action: string; entityId: string | null; after?: unknown }) =>
       row.action === "item.update" && row.entityId === trellis.id.toUpperCase()
     expect((await pageAll({ itemId: trellis.id })).some(done), "under the item").toBe(true)
@@ -158,6 +168,28 @@ describe("activity counts", () => {
     const lanternCount = counts.projects.find((entry) => entry.projectId === lantern.id)?.count
     expect(lanternCount).toBe((await pageAll({ projectId: lantern.id })).length)
     expect(counts.projects.some((entry) => entry.projectId === lantern.id.toUpperCase())).toBe(false)
+  })
+
+  it("matches an entity id that is a UUID in any case, and any other entity id exactly", async () => {
+    const { trellis } = await seed()
+    await t.ctx.db.insert(audit).values({
+      at: t.ctx.clock(),
+      actorKind: "owner",
+      actorLabel: "owner",
+      action: "item.update",
+      entityType: "item",
+      entityId: trellis.id.toUpperCase(),
+      source: "ui",
+    })
+    const lower = await pageAll({ entityType: "item", entityId: trellis.id })
+    expect(lower.map((row) => row.action)).toEqual(["item.update", "comment.create", "item.update", "item.create"])
+    expect(await pageAll({ entityType: "item", entityId: trellis.id.toUpperCase() })).toEqual(lower)
+    const first = await auditLog(t.ctx, { entityType: "item", entityId: trellis.id.toUpperCase() })
+    expect(first.total).toBe(lower.length)
+    // The settings row's id is not a UUID: it matches as written.
+    expect((await pageAll({ entityType: "settings", entityId: "1" })).map((row) => row.action)).toEqual([
+      "settings.update",
+    ])
   })
 
   it("lists an item's rows, its comments and threads included", async () => {

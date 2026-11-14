@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { createApp } from "../app.ts"
 import { RateLimiter } from "../http/auth.ts"
-import { createProject } from "../services/projects.ts"
+import { createProject, updateProject } from "../services/projects.ts"
 import { createAgentKey, ownerBrowser, type TestCore, testCore } from "../testing/app.ts"
 import { createTestDatabase, owner, type TestDatabase } from "../testing/db.ts"
 
@@ -160,6 +160,65 @@ describe("MCP over Streamable HTTP", () => {
     expect(ok.body.data).toMatchObject({ status: "waiting_on_you", version: 2 })
     const stale = await callTool(client, "adiutor_update_item", { itemId: id, version: 1, status: "done" })
     expect(stale).toMatchObject({ isError: true, body: { error: { code: "version_conflict", currentVersion: 2 } } })
+    await client.close()
+  })
+
+  it("takes ids in capitals as the same ids: the item's history lists every change", async () => {
+    const project = await createProject(t.ctx, owner, { name: "Lantern" })
+    await updateProject(t.ctx, owner, project.id, { goal: "First light" })
+    const client = await connect(AGENT)
+    // The tools still describe an id as a UUID: lower-casing happens after validation.
+    const { tools } = await client.listTools()
+    const update = tools.find((tool) => tool.name === "adiutor_update_item")
+    expect(update?.inputSchema.properties?.itemId).toMatchObject({ type: "string", format: "uuid" })
+    const goalId = (await callTool(client, "adiutor_list_projects", {})).body.data[0].goal.id
+    const created = await callTool(client, "adiutor_create_item", {
+      type: "task",
+      title: "Capitals",
+      projectId: project.id,
+      goalId,
+    })
+    const id: string = created.body.data.id
+    const upper = id.toUpperCase()
+
+    const updated = await callTool(client, "adiutor_update_item", {
+      itemId: upper,
+      version: 1,
+      status: "waiting_on_you",
+    })
+    expect(updated.body.data).toMatchObject({ id, status: "waiting_on_you", version: 2 })
+    // The same project in capitals is no move: the goal stays and nothing changes.
+    const same = await callTool(client, "adiutor_update_item", {
+      itemId: upper,
+      version: 2,
+      projectId: project.id.toUpperCase(),
+    })
+    expect(same.body.data).toMatchObject({ projectId: project.id, goalId, version: 2 })
+    expect((await callTool(client, "adiutor_comment", { itemId: upper, text: "Through capitals." })).isError).toBe(
+      false,
+    )
+    const link = { itemId: upper, threadId: "thread-capitals", parentThreadId: null }
+    expect((await callTool(client, "adiutor_link_thread", link)).body.data).toMatchObject({ created: true })
+    // The thread is linked to this item already: no conflict.
+    expect((await callTool(client, "adiutor_link_thread", link)).body.data).toMatchObject({ created: false })
+    // Starting the linked thread again names the same item: no conflict, and the item is in progress again.
+    const started = await callTool(client, "adiutor_start_thread", {
+      threadId: "thread-capitals",
+      parentThreadId: null,
+      title: "Capitals",
+      itemId: upper,
+    })
+    expect(started.body.data).toMatchObject({ created: false, item: { id, status: "in_progress" } })
+
+    const detail = await callTool(client, "adiutor_get_item", { itemId: id })
+    expect(detail.body.data.audit.map((row: { action: string }) => row.action)).toEqual([
+      "item.update",
+      "thread.link",
+      "comment.create",
+      "item.update",
+      "item.create",
+    ])
+    expect(detail.body.data.audit.every((row: { entityId: string }) => row.entityId === id)).toBe(true)
     await client.close()
   })
 

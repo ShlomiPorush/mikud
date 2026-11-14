@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import { Hono } from "hono"
 import { z } from "zod"
-import { LIMITS } from "../../shared/api.ts"
+import { LIMITS, uuidSchema } from "../../shared/api.ts"
 import {
   actorKindSchema,
   ITEM_STATUSES,
@@ -30,7 +30,7 @@ You cannot delete items or projects, and you cannot change a stage: propose one 
 Notes keep knowledge worth finding again (decisions, explanations, findings, how things work): find one with adiutor_find_notes before you write, and update it rather than writing a second one. Work to do is an item, not a note. You cannot delete notes.
 Subagent and review threads (those with a parent thread) must not call Adiutor.`
 
-const id = z.uuid()
+const id = uuidSchema
 const threadId = z.string().trim().min(1).max(200)
 
 function json(value: unknown) {

@@ -21,6 +21,7 @@ import {
   updateItemBody,
   updateNoteBody,
   updateProjectBody,
+  uuidSchema,
   visitBody,
 } from "../../shared/api.ts"
 import { actorKindSchema, itemStatusSchema, itemTypeSchema } from "../../shared/enums.ts"
@@ -103,12 +104,11 @@ function flatQuery(c: Context): Record<string, string | string[]> {
   return out
 }
 
-const uuid = z.uuid()
-/** A path id that is not a UUID cannot name anything: `not_found`. */
+/** A path id that is not a UUID cannot name anything: `not_found`. In lower case, as the database writes it. */
 function idParam(c: Context, name = "id"): string {
-  const value = c.req.param(name) ?? ""
-  if (!uuid.safeParse(value).success) throw notFound("The resource")
-  return value
+  const parsed = uuidSchema.safeParse(c.req.param(name) ?? "")
+  if (!parsed.success) throw notFound("The resource")
+  return parsed.data
 }
 
 const bool = z.enum(["true", "false"]).transform((v) => v === "true")
@@ -116,7 +116,7 @@ const limit = z.coerce.number().int().min(1).max(200).optional()
 
 const findItemsQuery = z.object({
   q: z.string().max(200).optional(),
-  projectId: z.uuid().optional(),
+  projectId: uuidSchema.optional(),
   inbox: bool.optional(),
   status: z.array(itemStatusSchema).optional(),
   type: itemTypeSchema.optional(),
@@ -124,7 +124,7 @@ const findItemsQuery = z.object({
   includeClosed: bool.optional(),
   limit,
 })
-const archiveQuery = z.object({ projectId: z.uuid().optional(), cursor: z.string().max(500).optional(), limit })
+const archiveQuery = z.object({ projectId: uuidSchema.optional(), cursor: z.string().max(500).optional(), limit })
 /** The activity filters (shared with the page's address) and the entity filters that came before them. */
 const auditQuery = auditFilterSchema.extend({
   cursor: z.string().max(500).optional(),
@@ -135,7 +135,7 @@ const auditQuery = auditFilterSchema.extend({
 const versionQuery = z.object({ version: z.coerce.number().int().min(1).optional() })
 const findNotesQuery = z.object({
   q: z.string().max(200).optional(),
-  projectId: z.uuid().optional(),
+  projectId: uuidSchema.optional(),
   general: bool.optional(),
   createdBy: actorKindSchema.optional(),
   sort: z.enum(NOTE_SORTS).optional(),

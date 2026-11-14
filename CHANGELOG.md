@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **The sync keeps a deleted item's threads untracked**: a snapshot that names such a thread as the parent of a linked thread no longer moves that link onto it. The link stays on the child thread, and the run counts it as `childLinksSuppressed`.
 - **Secret check on long runs without spaces**: the checks for credentials in URLs and for JWTs now take time in proportion to the text's length. Two edge cases may no longer be found: a JWT directly after `-` (`id-eyJ...`), and credentials after a URL scheme longer than 32 characters.
 - **Every new agent key has an end**: `POST /api/auth/api-key/create` now refuses a request without a number `expiresIn` (`400 EXPIRES_IN_REQUIRED`), so each key ends 1 to 365 days after it is created. `adiutor-sync connect` and the agent skill already send it; existing connections and keys are unchanged.
+- **Ids in capitals**: a UUID sent in capitals now works like the same id in lower case. Changes made through it appear in the item's history and in the overview's agent updates, the activity log stores it in lower case, the same project id no longer clears an item's goal, linking a thread again no longer answers `conflict`, and a project read through it shows its goal. Rows stored earlier with an id in capitals appear in the item's history and the overview too.
 
 ### Security
 

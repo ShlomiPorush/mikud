@@ -7,7 +7,7 @@ Status: implemented in `src/server/http/`, `src/server/auth/`, `src/server/setti
 - Base path `/api/v1`. JSON in and out (`Content-Type: application/json`). Bodies are limited to 512 KiB, sync snapshots to 16 MiB. The limits apply after authentication: a request without valid credentials is refused before the application reads its body.
 - Success: `{"data": ...}`. Paged lists: `{"data": [...], "nextCursor": "..." | null}`; pass `cursor=<nextCursor>` for the next page. `201` for a created resource, `204` (no body) for a delete.
 - Error: `{"error": {"code": "<code>", "message": "<for people>", ...details}}`. Branch on `code`, never on `message`.
-- Times are ISO 8601 strings in UTC. Ids are UUIDs, except T3 thread and project ids (opaque strings, up to 200 characters).
+- Times are ISO 8601 strings in UTC. Ids are UUIDs, except T3 thread and project ids (opaque strings, up to 200 characters). A UUID is accepted in any case and answered and recorded in lower case.
 - Codes (stage, status, type, severity, actor kind) are the English codes of `src/shared/enums.ts`. Labels come from the locale files.
 - Unknown body fields are ignored. A path id that is not a UUID answers `not_found`.
 
@@ -245,7 +245,7 @@ Item rules: entering `done` or `not_relevant` sets `closedAt`; any other status 
 | `itemId`                 | UUID                                                                                                                | The item's rows, its comments and threads included                                                                                                                                                                                                                                     |
 | `q`                      | Text, up to 200 characters, trimmed; empty is no filter                                                             | Rows whose action code, entity type, actor label or name (an item's title, a project's name, a key's label) holds the text, case-insensitive, with `%` and `_` taken literally. With `lang` also the rows whose action or entity type has a label in that language that holds the text |
 | `lang`                   | `he` or `en`                                                                                                        | The language whose labels `q` matches (`audit.action` and `audit.entity` in `src/shared/locales`); the UI sends its own                                                                                                                                                                |
-| `entityType`, `entityId` | Text                                                                                                                | Rows of that entity (the filters from before these)                                                                                                                                                                                                                                    |
+| `entityType`, `entityId` | Text                                                                                                                | Rows of that entity (the filters from before these); a UUID matches in any case                                                                                                                                                                                                        |
 
 The first page (no `cursor`) also answers `total`, the rows every filter lists, and `counts`, read in one snapshot with the page:
 
