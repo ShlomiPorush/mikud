@@ -90,6 +90,8 @@ check "the proxy runs as UID 101" holds '    user: "101:101"' "$(service proxy)"
 check "any other host gets 421" grep -Pzq 'listen 8080 default_server;\n\s*return 421;' "$PROXY_CONF"
 check "the proxy passes on its own host name only" \
   test "$(grep -E '^\s*server_name ' "$PROXY_CONF" | tr -s ' ')" = " server_name $PR_HOST;"
+check "the proxy refuses a Host header for another name, whatever the request line says" \
+  holds "if (\$http_host !~* \"^${PR_HOST//./\\.}(:[0-9]+)?\$\") {" "$(sed -n "/server_name $PR_HOST;/,/}/p" "$PROXY_CONF")"
 check "the proxy configuration is readable by nginx's user" test "$(stat -c %a "$PROXY_CONF")" = 644
 
 # --- status ---

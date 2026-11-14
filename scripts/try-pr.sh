@@ -184,6 +184,10 @@ http {
   server {
     listen 8080;
     server_name $PR_HOST;
+    # nginx may pick this server from an absolute request line; the Host header must name it too.
+    if (\$http_host !~* "^${PR_HOST//./\\.}(:[0-9]+)?\$") {
+      return 421;
+    }
     # The server applies its own limits.
     client_max_body_size 0;
     location / {
@@ -313,6 +317,9 @@ status() {
   if grep -q '^  proxy:' "$COMPOSE_FILE"; then
     check_non_root "$PR_PROJECT" adiutor postgres proxy
     check_hardening "$PR_PROJECT" adiutor proxy
+    cid="$(pr_compose ps -q proxy)"
+    [ -n "$cid" ] || die "service proxy is not running"
+    [ "$(docker inspect -f '{{.State.Health.Status}}' "$cid")" = healthy ] || die "proxy is not healthy"
   else
     check_non_root "$PR_PROJECT" adiutor postgres
     check_hardening "$PR_PROJECT"
