@@ -114,12 +114,14 @@ async function guarded(ctx: Ctx, id: string, run: Run, work: () => Promise<void>
 
 /**
  * A snapshot collected later than the server's clock allows is refused whole, and nothing of it is applied. The
- * run is recorded as failed first, so the sync status shows the refusal.
+ * run is recorded as failed, in one insert, so the sync status shows the refusal and no run is left open.
  */
-async function refuseFutureSnapshot(ctx: Ctx, id: string, run: Run, collectedAt: Date, limit: number) {
+async function refuseFutureSnapshot(ctx: Ctx, kind: string, collectedAt: Date, limit: number) {
   if (!later(collectedAt, limit)) return
-  run.refuse("snapshot", TIME_IN_FUTURE)
-  await finishRun(ctx, id, run)
+  const now = ctx.clock()
+  const errors = [{ record: "snapshot", code: TIME_IN_FUTURE }]
+  await ctx.db.insert(syncRuns).values({ kind, startedAt: now, finishedAt: now, outcome: "failed", counts: {}, errors })
+  log.warn("sync snapshot refused", { kind, code: TIME_IN_FUTURE })
   throw invalid("collectedAt is later than the server's clock allows.", { field: "collectedAt" })
 }
 
@@ -136,9 +138,9 @@ export type ApplyHooks = {
  */
 export async function applyT3Snapshot(ctx: Ctx, snapshot: T3Snapshot, hooks: ApplyHooks = {}): Promise<SyncResult> {
   const limit = latestAllowed(ctx)
+  await refuseFutureSnapshot(ctx, "t3", snapshot.collectedAt, limit)
   const runId = await startRun(ctx, "t3")
   const run = new Run("t3")
-  await refuseFutureSnapshot(ctx, runId, run, snapshot.collectedAt, limit)
   return guarded(ctx, runId, run, async () => {
     const [previous] = await ctx.db
       .select({ id: syncRuns.id })
@@ -406,9 +408,9 @@ async function foldChildLink(
  */
 export async function applySecuritySnapshot(ctx: Ctx, snapshot: SecuritySnapshot): Promise<SyncResult> {
   const limit = latestAllowed(ctx)
+  await refuseFutureSnapshot(ctx, "security", snapshot.collectedAt, limit)
   const runId = await startRun(ctx, "security")
   const run = new Run("security")
-  await refuseFutureSnapshot(ctx, runId, run, snapshot.collectedAt, limit)
   return guarded(ctx, runId, run, async () => {
     for (const repo of snapshot.repos) {
       // Any time later than the server's clock allows refuses the whole repository record, before any write.

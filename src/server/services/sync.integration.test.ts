@@ -275,6 +275,13 @@ describe("applyT3Snapshot", () => {
     expect(await itemOf("settled-late")).toBeUndefined()
   })
 
+  it("records a run whose only records were refused for future times as failed", async () => {
+    const FUTURE = new Date(Date.UTC(2099, 0, 1))
+    const result = await applyT3Snapshot(t.ctx, snapshot([thread("a", { updatedAt: FUTURE })], { projects: [] }))
+    expect(result).toMatchObject({ outcome: "failed", errors: [{ record: "thread:a", code: "time_in_future" }] })
+    expect(await t.ctx.db.select().from(items)).toEqual([])
+  })
+
   it("folds a child under a refused root without taking the root's times", async () => {
     const FUTURE = new Date(Date.UTC(2099, 0, 1))
     const item = await linkedItem("in_progress", ["child"])
@@ -667,6 +674,31 @@ describe("applySecuritySnapshot", () => {
       security({ issuesAsOf: edge, families: [{ ...valid, asOf: edge }] }),
     )
     expect(accepted).toMatchObject({ outcome: "succeeded", counts: { projectsUpdated: 1 } })
+  })
+
+  it("applies the other repositories of a snapshot when one is refused, and fails a run when all are", async () => {
+    const FUTURE = new Date(Date.UTC(2099, 0, 1))
+    const garden = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    const orchard = await createProject(t.ctx, owner, { name: "Orchard", githubRepo: "example/orchard" })
+    const repo = (name: string, asOf: Date) => ({ repo: name, openIssues: 3, issuesAsOf: asOf, families: [] })
+    const mixed = await applySecuritySnapshot(t.ctx, {
+      collectedAt: t.ctx.clock(),
+      repos: [repo("example/garden", FUTURE), repo("example/orchard", ago(HOUR))],
+    })
+    expect(mixed).toMatchObject({
+      outcome: "partial",
+      counts: { projectsUpdated: 1 },
+      errors: [{ record: "repo:example/garden", code: "time_in_future" }],
+    })
+    const count = async (id: string) =>
+      (await t.ctx.db.select().from(projects).where(eq(projects.id, id)))[0]?.openIssuesCount
+    expect(await count(garden.id)).toBeNull()
+    expect(await count(orchard.id)).toBe(3)
+    const all = await applySecuritySnapshot(t.ctx, {
+      collectedAt: t.ctx.clock(),
+      repos: [repo("example/garden", FUTURE)],
+    })
+    expect(all.outcome).toBe("failed")
   })
 
   it("refuses a whole security snapshot collected later than the server's clock allows", async () => {
