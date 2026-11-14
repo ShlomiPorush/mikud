@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **Secret check on long values**: removing sentence punctuation from the end of a value after a secret name such as `token=` or `DB_PASSWORD=` now takes time in proportion to the value's length. A long run of `.`, `!`, `?` or `:` inside such a value no longer keeps the server busy for seconds. What the check finds is unchanged.
 - **Failed agent keys limit only the client that sent them**: behind Traefik, ten wrong keys from one client made every agent, the sync and the owner's browser wait a minute on `/api/v1` and `/mcp`. The limit now counts the client address from `X-Forwarded-For` when the connection comes from a proxy in `ADIUTOR_TRUSTED_PROXIES`, and applies only to requests with an `Authorization` header, so the owner's browser session is never limited by failed keys.
+- **The sync keeps a deleted item's threads untracked**: a snapshot that names such a thread as the parent of a linked thread no longer moves that link onto it. The link stays on the child thread, and the run counts it as `childLinksSuppressed`.
 
 ## [0.1.1] - 2026-11-13
 
