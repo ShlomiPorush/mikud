@@ -80,7 +80,10 @@ const BASE_RULES: Rule[] = [
   },
   {
     name: "url_credentials",
-    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/@]+)@/gi,
+    // The scheme is at most 32 characters, so a long run of "a." or "a-" is not rescanned from every
+    // word boundary in it. User and password keep no cap (a long token can be the password); they cannot
+    // cross a "/", so only the few starts in front of one "://" scan them.
+    pattern: /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/@]+)@/gi,
     group: 1,
     accept: (m) => !isPlaceholder(m[1] ?? ""),
   },
@@ -94,7 +97,10 @@ const BASE_RULES: Rule[] = [
   { name: "aws_access_key", pattern: /\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/g },
   { name: "google_api_key", pattern: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g },
   { name: "telegram_bot_token", pattern: /\b\d{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g },
-  { name: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
+  // A JWT does not start inside a run of token characters, so a long run is scanned from one start only
+  // (a JWT glued to a word by "-" is not found). The header has no length cap: one with an embedded
+  // certificate chain is several kilobytes.
+  { name: "jwt", pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
   {
     name: "secret_assignment",
     // key, optional closing quote of a JSON key, = or :, optional quote, then the value.
