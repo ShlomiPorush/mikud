@@ -7,7 +7,7 @@ import { lockLinkStructure } from "./context.ts"
 import { createItem, deleteItem, getItemRow, linkThread, updateItem } from "./items.ts"
 import { createProject, deleteProject } from "./projects.ts"
 import { REDACTED } from "./secrets.ts"
-import { applySecuritySnapshot, applyT3Snapshot } from "./sync.ts"
+import { applySecuritySnapshot, applyT3Snapshot, SYNC_CLOCK_SKEW_MS } from "./sync.ts"
 import { startThread } from "./threads.ts"
 
 let t: TestDatabase
@@ -227,6 +227,90 @@ describe("applyT3Snapshot", () => {
     // The same time with other data is a no-op too.
     await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "waiting", updatedAt: newer })]))
     expect((await t.ctx.db.select().from(itemThreads))[0]).toMatchObject({ lastStatus: "running" })
+  })
+
+  it("never lets a thread record dated in the future freeze the link against later honest records", async () => {
+    const FUTURE = new Date(Date.UTC(2099, 0, 1))
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "running", updatedAt: ago(HOUR) })]))
+    const item = await itemOf("a")
+    expect(item).toMatchObject({ status: "in_progress" })
+    const refused = await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "running", updatedAt: FUTURE })]))
+    expect(refused.errors).toEqual([{ record: "thread:a", code: "time_in_future" }])
+    expect(refused.outcome).toBe("partial")
+    await updateItem(t.ctx, owner, item?.id ?? "", item?.version ?? 0, { status: "todo" })
+    t.clock.travel(HOUR)
+    // Activity after the owner's change: completed but not settled, which changes no status.
+    await applyT3Snapshot(t.ctx, snapshot([thread("a", { status: "completed", updatedAt: ago(0) })]))
+    const [link] = await t.ctx.db.select().from(itemThreads)
+    expect(link).toMatchObject({ lastStatus: "completed" })
+    expect(link?.lastActivityAt?.getTime()).toBeLessThanOrEqual(t.ctx.clock().getTime())
+    expect(await getItemRow(t.ctx.db, item?.id ?? "")).toMatchObject({ status: "todo", statusSetBy: "owner" })
+  })
+
+  it("accepts thread times up to five minutes ahead of the server's clock and refuses later ones alone", async () => {
+    const now = t.ctx.clock()
+    const at = { ...t.ctx, clock: () => now }
+    const edge = new Date(now.getTime() + SYNC_CLOCK_SKEW_MS)
+    const beyond = new Date(edge.getTime() + 1)
+    const result = await applyT3Snapshot(
+      at,
+      snapshot(
+        [
+          // Later than collectedAt (taken before the threads are read) but within the bound: accepted.
+          thread("edge", { updatedAt: edge }),
+          thread("late", { updatedAt: beyond }),
+          thread("settled-late", { status: "completed", settled: true, settledAt: beyond, updatedAt: ago(HOUR) }),
+        ],
+        { collectedAt: new Date(now.getTime() - 10 * 60_000) },
+      ),
+    )
+    expect(result.outcome).toBe("partial")
+    expect(result.errors).toEqual([
+      { record: "thread:late", code: "time_in_future" },
+      { record: "thread:settled-late", code: "time_in_future" },
+    ])
+    expect(result.counts).toMatchObject({ projectsCreated: 1, itemsCreated: 1 })
+    expect(await itemOf("edge")).toMatchObject({ status: "in_progress" })
+    expect(await itemOf("late")).toBeUndefined()
+    expect(await itemOf("settled-late")).toBeUndefined()
+  })
+
+  it("folds a child under a refused root without taking the root's times", async () => {
+    const FUTURE = new Date(Date.UTC(2099, 0, 1))
+    const item = await linkedItem("in_progress", ["child"])
+    const result = await applyT3Snapshot(
+      t.ctx,
+      snapshot([
+        thread("root", { status: "waiting", updatedAt: FUTURE }),
+        thread("child", { parentThreadId: "root", updatedAt: ago(HOUR) }),
+      ]),
+    )
+    expect(result.errors).toEqual([{ record: "thread:root", code: "time_in_future" }])
+    expect(result.counts).toMatchObject({ childLinksFolded: 1 })
+    const [link] = await t.ctx.db.select().from(itemThreads)
+    expect(link).toMatchObject({ itemId: item.id, threadId: "root" })
+    expect(link?.lastActivityAt?.getTime() ?? 0).toBeLessThan(FUTURE.getTime())
+    expect(link?.lastStatus).not.toBe("waiting")
+  })
+
+  it("refuses a whole snapshot collected later than the server's clock allows, and records the run as failed", async () => {
+    const now = t.ctx.clock()
+    const at = { ...t.ctx, clock: () => now }
+    const edge = snapshot([thread("a")], { collectedAt: new Date(now.getTime() + SYNC_CLOCK_SKEW_MS) })
+    expect((await applyT3Snapshot(at, edge)).outcome).toBe("succeeded")
+    await t.reset()
+    const beyond = snapshot([thread("a")], { collectedAt: new Date(now.getTime() + SYNC_CLOCK_SKEW_MS + 1) })
+    await expect(applyT3Snapshot(at, beyond)).rejects.toMatchObject({ code: "validation_failed" })
+    expect(await t.ctx.db.select().from(projects)).toEqual([])
+    expect(await t.ctx.db.select().from(items)).toEqual([])
+    const runs = await t.ctx.db.select().from(syncRuns)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({
+      kind: "t3",
+      outcome: "failed",
+      errors: [{ record: "snapshot", code: "time_in_future" }],
+    })
+    expect(runs[0]?.finishedAt).not.toBeNull()
   })
 
   it("imports a settled thread without an item only when it settled in the last 7 days", async () => {
@@ -525,6 +609,79 @@ describe("applySecuritySnapshot", () => {
     expect(p?.openIssuesCount).toBe(4)
     const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
     expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ critical: 1, high: 2, low: 3 })
+  })
+
+  it("never lets counts dated in the future hold back a later honest snapshot", async () => {
+    const FUTURE = new Date(Date.UTC(2099, 0, 1))
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    await applySecuritySnapshot(t.ctx, security())
+    const zero = { critical: 0, high: 0, medium: 0, low: 0 }
+    const refused = await applySecuritySnapshot(
+      t.ctx,
+      security({
+        openIssues: 0,
+        issuesAsOf: FUTURE,
+        families: [{ family: "dependabot", coverage: "enabled", counts: zero, asOf: FUTURE }],
+      }),
+    )
+    expect(refused.errors).toEqual([{ record: "repo:Example/Garden", code: "time_in_future" }])
+    t.clock.travel(HOUR)
+    await applySecuritySnapshot(
+      t.ctx,
+      security({
+        openIssues: 6,
+        issuesAsOf: ago(0),
+        families: [{ family: "dependabot", coverage: "enabled", counts: { ...zero, critical: 5 }, asOf: ago(0) }],
+      }),
+    )
+    const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+    expect(p?.openIssuesCount).toBe(6)
+    const sources = await t.ctx.db.select().from(securitySources).where(eq(securitySources.projectId, project.id))
+    expect(sources.find((s) => s.family === "dependabot")).toMatchObject({ critical: 5 })
+  })
+
+  it("refuses a repository when any one of its times is later than the server's clock allows, writing none of it", async () => {
+    const now = t.ctx.clock()
+    const at = { ...t.ctx, clock: () => now }
+    const beyond = new Date(now.getTime() + SYNC_CLOCK_SKEW_MS + 1)
+    const edge = new Date(now.getTime() + SYNC_CLOCK_SKEW_MS)
+    const project = await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    const zero = { critical: 0, high: 0, medium: 0, low: 0 }
+    const valid = { family: "dependabot" as const, coverage: "enabled" as const, counts: zero, asOf: ago(HOUR) }
+    const cases = [
+      security({ openIssues: 9, issuesAsOf: beyond, families: [valid] }),
+      security({ families: [valid, { ...valid, family: "code_scanning", asOf: beyond }] }),
+    ]
+    for (const snap of cases) {
+      const result = await applySecuritySnapshot(at, snap)
+      // The other repository in the snapshot is still read (it matches no project).
+      expect(result).toMatchObject({ outcome: "partial", counts: { reposUnmatched: 1 } })
+      expect(result.errors).toEqual([{ record: "repo:Example/Garden", code: "time_in_future" }])
+      const [p] = await t.ctx.db.select().from(projects).where(eq(projects.id, project.id))
+      expect(p?.openIssuesCount).toBeNull()
+      expect(await t.ctx.db.select().from(securitySources)).toEqual([])
+    }
+    // Exactly at the bound is accepted.
+    const accepted = await applySecuritySnapshot(
+      at,
+      security({ issuesAsOf: edge, families: [{ ...valid, asOf: edge }] }),
+    )
+    expect(accepted).toMatchObject({ outcome: "succeeded", counts: { projectsUpdated: 1 } })
+  })
+
+  it("refuses a whole security snapshot collected later than the server's clock allows", async () => {
+    const now = t.ctx.clock()
+    const at = { ...t.ctx, clock: () => now }
+    await createProject(t.ctx, owner, { name: "Garden", githubRepo: "example/garden" })
+    const snap = { ...security(), collectedAt: new Date(now.getTime() + SYNC_CLOCK_SKEW_MS + 1) }
+    await expect(applySecuritySnapshot(at, snap)).rejects.toMatchObject({ code: "validation_failed" })
+    expect(await t.ctx.db.select().from(securitySources)).toEqual([])
+    const [run] = await t.ctx.db.select().from(syncRuns)
+    expect(run).toMatchObject({
+      kind: "security",
+      outcome: "failed",
+      errors: [{ record: "snapshot", code: "time_in_future" }],
+    })
   })
 
   it("never overwrites known counts with a record that has no time (a failed or unknown read)", async () => {
