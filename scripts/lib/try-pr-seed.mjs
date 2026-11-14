@@ -73,7 +73,7 @@ await page("/api/auth/sign-up/email", {
 const { totpURI, backupCodes } = await page("/api/auth/two-factor/enable", { password })
 const totpSecret = new URL(totpURI).searchParams.get("secret")
 await page("/api/auth/two-factor/verify-totp", { code: totp(totpSecret) })
-const { key: token } = await page("/api/auth/api-key/create", { name: "try-pr seed" })
+const { key: token } = await page("/api/auth/api-key/create", { name: "try-pr seed", expiresIn: 30 * 86_400 })
 writeFileSync(
   ownerFile,
   [

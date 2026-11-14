@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - **Failed agent keys limit only the client that sent them**: behind Traefik, ten wrong keys from one client made every agent, the sync and the owner's browser wait a minute on `/api/v1` and `/mcp`. The limit now counts the client address from `X-Forwarded-For` when the connection comes from a proxy in `ADIUTOR_TRUSTED_PROXIES`, and applies only to requests with an `Authorization` header, so the owner's browser session is never limited by failed keys.
 - **The sync keeps a deleted item's threads untracked**: a snapshot that names such a thread as the parent of a linked thread no longer moves that link onto it. The link stays on the child thread, and the run counts it as `childLinksSuppressed`.
 - **Secret check on long runs without spaces**: the checks for credentials in URLs and for JWTs now take time in proportion to the text's length. Two edge cases may no longer be found: a JWT directly after `-` (`id-eyJ...`), and credentials after a URL scheme longer than 32 characters.
+- **Every new agent key has an end**: `POST /api/auth/api-key/create` now refuses a request without a number `expiresIn` (`400 EXPIRES_IN_REQUIRED`), so each key ends 1 to 365 days after it is created. `adiutor-sync connect` and the agent skill already send it; existing connections and keys are unchanged.
 
 ### Security
 

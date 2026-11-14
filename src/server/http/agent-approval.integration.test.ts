@@ -327,6 +327,18 @@ describe("agent approval: bearer() and the agent keys stay apart", () => {
     expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(1)
   })
 
+  it("the device session cannot create a key without an end in days", async () => {
+    const b = await owner()
+    const token = await approvedToken(b)
+    const c = cli()
+    for (const body of [{ name: "none" }, { name: "null", expiresIn: null }]) {
+      const refused = await c.createKey(token, body)
+      expect([body.name, refused.status, refused.json.code]).toEqual([body.name, 400, "EXPIRES_IN_REQUIRED"])
+    }
+    expect(await t.ctx.db.select().from(authApiKey)).toHaveLength(0)
+    expect((await c.revoke(token)).json).toEqual({ status: true })
+  })
+
   it("the device session reaches only /api-key/create and the end of itself, with or without a cookie", async () => {
     const b = await owner()
     const token = await approvedToken(b)
