@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- **`adiutor-sync connect` checks the key it receives**: it uses the key only when it is `adt_` followed by letters and digits. Anything else in a successful answer is neither saved, printed nor passed to Claude Code, Codex or `setx`, and `connect` exits 1 and asks to disconnect that key in Settings, Agent access. The `codex.env` line and the printed `export` and `claude mcp add` lines hold the key in single quotes outside Windows, and the sync's env file never takes a value with a line break.
+
 ### Fixed
 
 - **Secret check on long values**: removing sentence punctuation from the end of a value after a secret name such as `token=` or `DB_PASSWORD=` now takes time in proportion to the value's length. A long run of `.`, `!`, `?` or `:` inside such a value no longer keeps the server busy for seconds. What the check finds is unchanged.

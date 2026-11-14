@@ -21,6 +21,14 @@ export const DAYS_MAX = 365
 export const NAME_MAX = 32
 /** The variable Codex reads the key from (bearer_token_env_var). */
 export const CODEX_KEY_VARIABLE = "ADIUTOR_AGENT_KEY"
+/** Every agent key starts with this (src/shared/auth.ts); the api-key plugin adds 64 letters. */
+export const AGENT_KEY_PREFIX = "adt_"
+/**
+ * An agent key as Adiutor makes it: the prefix, then letters and digits only. Checked before the key is saved, printed
+ * or handed to a client, so the answer of whoever is at the address can never carry anything a shell or an env file
+ * would read as more than the key.
+ */
+const AGENT_KEY = new RegExp(`^${AGENT_KEY_PREFIX}[A-Za-z0-9]{32,256}$`)
 
 export const TARGETS = ["sync", "claude", "codex"] as const
 export type Target = (typeof TARGETS)[number]
@@ -205,6 +213,8 @@ export function withSyncKey(text: string, url: string, key: string): string {
   let lines = text.replace(/^﻿/, "").split(/\r?\n/)
   while (lines.length > 0 && lines.at(-1) === "") lines.pop()
   const set = (name: string, value: string) => {
+    // A line break would add lines of its own to the file.
+    if (/[\r\n]/.test(value)) throw new ConnectError(`${name} holds a line break`)
     const pattern = new RegExp(`^\\s*(export\\s+)?${name}\\s*=`)
     const first = lines.findIndex((line) => pattern.test(line))
     if (first === -1) {
@@ -222,11 +232,13 @@ async function saveSyncKey(path: string, url: string, key: string): Promise<void
   const before = await readFile(path, "utf8")
   // Checks the file still parses, so a broken file is reported before it is changed.
   parseEnvFile(before)
+  // Built before the file is emptied, so a refused value leaves the file as it was.
+  const after = withSyncKey(before, url, key)
   // Written in place: the restricted access list of the file stays.
   const handle = await open(path, "r+")
   try {
     await handle.truncate(0)
-    await handle.write(withSyncKey(before, url, key), 0, "utf8")
+    await handle.write(after, 0, "utf8")
   } finally {
     await handle.close()
   }
@@ -270,9 +282,15 @@ export function codexAddArgs(url: string): string[] {
   return ["mcp", "add", SERVER_NAME, "--url", `${url}/mcp`, "--bearer-token-env-var", CODEX_KEY_VARIABLE]
 }
 
-/** The fallback for Claude Code: the same command, to run by hand. */
-export function claudeCommand(url: string, key: string): string {
-  return `claude mcp add --transport http --scope user ${SERVER_NAME} ${url}/mcp --header "Authorization: Bearer ${key}"`
+/**
+ * The fallback for Claude Code: the same command, to run by hand. The header is in single quotes for a POSIX shell, so
+ * it gives the value no meaning; cmd.exe has no single quotes, and the checked key holds nothing either Windows shell
+ * expands inside double quotes.
+ */
+export function claudeCommand(url: string, key: string, platform: NodeJS.Platform): string {
+  const header = `Authorization: Bearer ${key}`
+  const quoted = platform === "win32" ? `"${header}"` : `'${header}'`
+  return `claude mcp add --transport http --scope user ${SERVER_NAME} ${url}/mcp --header ${quoted}`
 }
 
 /** The fallback for Codex's configuration: no key, only the variable's name. */
@@ -280,9 +298,9 @@ export function codexConfigLines(url: string): string[] {
   return [`[mcp_servers.${SERVER_NAME}]`, `url = "${url}/mcp"`, `bearer_token_env_var = "${CODEX_KEY_VARIABLE}"`]
 }
 
-/** The fallback for Codex's variable. */
+/** The fallback for Codex's variable, single-quoted for a POSIX shell. */
 export function codexVariableLine(key: string, platform: NodeJS.Platform): string {
-  return platform === "win32" ? `setx ${CODEX_KEY_VARIABLE} "${key}"` : `export ${CODEX_KEY_VARIABLE}="${key}"`
+  return platform === "win32" ? `setx ${CODEX_KEY_VARIABLE} "${key}"` : `export ${CODEX_KEY_VARIABLE}='${key}'`
 }
 
 /** Why a client's command failed, in one line, with the key masked (before shortening) should the client echo it. */
@@ -305,7 +323,7 @@ async function deliverToClaude(url: string, key: string, deps: ConnectDeps): Pro
     say(`Could not add Adiutor to Claude Code: ${why}.`)
     say("Run this once to add it yourself; Adiutor shows the key only now:")
     say("")
-    say(claudeCommand(url, key))
+    say(claudeCommand(url, key, deps.platform))
     say("")
     say(HISTORY_NOTE)
   }
@@ -344,11 +362,11 @@ async function saveCodexVariable(key: string, deps: ConnectDeps): Promise<string
   const file = codexEnvFile(deps.env)
   try {
     await prepareEnvFile(file, deps)
-    // Written in place, like the sync's file; it holds this one line only.
+    // Written in place, like the sync's file; it holds this one line only, the key in single quotes for the shell.
     const handle = await open(file, "r+")
     try {
       await handle.truncate(0)
-      await handle.write(`export ${CODEX_KEY_VARIABLE}=${key}\n`, 0, "utf8")
+      await handle.write(`export ${CODEX_KEY_VARIABLE}='${key}'\n`, 0, "utf8")
     } finally {
       await handle.close()
     }
@@ -518,12 +536,20 @@ async function createAndDeliver(
     { name: options.name, expiresIn: options.days * 86_400 },
     token,
   )
-  const key = "error" in created ? "" : str(created.body?.key)
-  if ("error" in created || created.status !== 200 || !key) {
+  if ("error" in created || created.status !== 200) {
     say(`connect: Adiutor did not create the key: ${reason(created)}`)
     return EXIT_NOT_CONNECTED
   }
-  const until = "error" in created ? "" : str(created.body?.expiresAt).slice(0, 10)
+  // A success may have made a key even when the answer does not hold a usable one: never save or show that answer.
+  const key = str(created.body?.key)
+  if (!AGENT_KEY.test(key)) {
+    say(
+      `connect: Adiutor created the key "${options.name}", but its answer is not a valid agent key, so nothing was ` +
+        "saved. Disconnect it in Adiutor, Settings, Agent access.",
+    )
+    return EXIT_NOT_CONNECTED
+  }
+  const until = str(created.body?.expiresAt).slice(0, 10)
   const ends = until ? ` It works until ${until}.` : ""
 
   if (options.target === "sync") {
