@@ -1,6 +1,6 @@
 {
   "name": "adiutor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Personal project-focus system: a morning board, a Telegram morning message and an MCP server for AI agents",
   "license": "MIT",

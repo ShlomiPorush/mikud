@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-14
+
 ### Changed
 
 - **`adiutor-sync connect` checks the key it receives**: it uses the key only when it is `adt_` followed by letters and digits. Anything else in a successful answer is neither saved, printed nor passed to Claude Code, Codex or `setx`, and `connect` exits 1 and asks to disconnect that key in Settings, Agent access. The `codex.env` line and the printed `export` and `claude mcp add` lines hold the key in single quotes outside Windows, and the sync's env file never takes a value with a line break.
