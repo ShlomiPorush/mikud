@@ -207,7 +207,7 @@ docker compose exec adiutor node dist/server/cli.js reset-password
 
 It runs Better Auth's own password reset: it prints the username and a new random password once, signs out every browser, and records the reset in the activity log (actor "system", source "server command"). Two-factor stays: sign in with the new password and the authenticator, or a saved backup code, then change the password on the Account page. A sign-in that someone started before the reset with your old password and a current code can still finish within 3 minutes (G3); check the browsers list afterwards.
 
-**Lost the authenticator:** sign in with the password and a saved backup code ("Use a backup code"), then the Account page, "Set up a new authenticator". With the password lost too, run the command above first. Finish the setup right away: until the new authenticator is verified, two-factor is off and the password alone signs in, from any browser, and leads to the setup (G-C in the foundation plan).
+**Lost the authenticator:** sign in with the password and a saved backup code ("Use a backup code"), then the Account page, "Set up a new authenticator". With the password lost too, run the command above first. Finish the setup right away: until the new authenticator is verified, the password alone can sign in, from any browser, and lead to the setup (G-C in the foundation plan).
 
 **Lost the authenticator and every backup code,** with no browser still signed in and sign-in codes to Telegram off: there is no supported way back; only editing the database by hand (G4 in the foundation plan). Keep the backup codes safe, and make new ones when they run low.
 
