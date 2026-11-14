@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- **Secret check on long values**: removing sentence punctuation from the end of a value after a secret name such as `token=` or `DB_PASSWORD=` now takes time in proportion to the value's length. A long run of `.`, `!`, `?` or `:` inside such a value no longer keeps the server busy for seconds. What the check finds is unchanged.
+
 ## [0.1.1] - 2026-11-13
 
 ### Fixed

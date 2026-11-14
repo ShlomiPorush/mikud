@@ -136,6 +136,76 @@ describe("secret scanner", () => {
   )
 })
 
+describe("scan time", () => {
+  // A long run of sentence punctuation inside an assignment's value, at the length a note body accepts.
+  // The check must stay linear: one request must not hold the server for seconds.
+  const budgetMs = 250
+  const run = (chars: string) => `a${rep(chars, 100_000)}a`
+  const scanner = createSecretScanner()
+  const timed = <T>(fn: () => T): [T, number] => {
+    const start = performance.now()
+    const result = fn()
+    return [result, performance.now() - start]
+  }
+
+  it.each([
+    ["token=", "."],
+    ["DB_PASSWORD=", "."],
+    ["token=", "!?:."],
+    ["DB_PASSWORD=", "!?:."],
+  ])(
+    "finds %s with a long %s run in linear time",
+    (key, chars) => {
+      const [rule, ms] = timed(() => scanner.find(`${key}${run(chars)}`))
+      expect(rule).toBe("secret_assignment")
+      expect(ms).toBeLessThan(budgetMs)
+    },
+    30_000,
+  )
+
+  it.each([
+    ["token=", "."],
+    ["DB_PASSWORD=", "."],
+  ])(
+    "redacts %s with a long %s run in linear time",
+    (key, chars) => {
+      const [out, ms] = timed(() => scanner.redact(`${key}${run(chars)}`))
+      expect(out).toBe(`${key}${REDACTED}`)
+      expect(ms).toBeLessThan(budgetMs)
+    },
+    30_000,
+  )
+
+  it("passes a value of punctuation alone in linear time", () => {
+    const [rule, ms] = timed(() => scanner.find(`token=${rep(".", 100_000)}`))
+    expect(rule).toBeNull()
+    expect(ms).toBeLessThan(budgetMs)
+  }, 30_000)
+})
+
+describe("sentence punctuation after a value", () => {
+  const scanner = createSecretScanner()
+
+  it.each([
+    `token=${rep("Ab3dE6", 12)}!?:.`,
+    `DB_PASSWORD=${["Spring", "2026x"].join("")}.`,
+    `API_SECRET=${rep("q1w2e3r4", 16)}:`,
+  ])("still refuses %s", (text) => {
+    expect(scanner.find(text)).toBe("secret_assignment")
+  })
+
+  it.each([
+    "token: expired.",
+    "secret=rotated!?",
+    "password=***.",
+    "DB_PASSWORD=short1.",
+    "DB_PASSWORD=*******.!",
+    "SIGNING_KEY=<key>:",
+  ])("still passes %s", (text) => {
+    expect(scanner.find(text)).toBeNull()
+  })
+})
+
 describe("Adiutor's own agent keys", () => {
   it("refuses an adt_ key, also inside a sentence, and lets the prefix alone pass", () => {
     const scanner = createSecretScanner()

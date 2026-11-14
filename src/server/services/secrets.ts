@@ -33,10 +33,19 @@ export function isPlaceholder(value: string): boolean {
   )
 }
 
+/**
+ * Sentence punctuation after a value is not part of it. A backward loop, so the time is linear in the
+ * value's length: an unanchored /[.!?:]+$/ retries at every position of a long run and is quadratic.
+ */
+function stripTrailingPunctuation(value: string): string {
+  let end = value.length
+  while (end > 0 && ".!?:".includes(value.charAt(end - 1))) end--
+  return value.slice(0, end)
+}
+
 /** A value after "password=" and friends looks like a credential, not a word of prose. */
 function looksLikeCredential(raw: string): boolean {
-  // Sentence punctuation after the value is not part of it.
-  const value = raw.replace(/[.!?:]+$/, "")
+  const value = stripTrailingPunctuation(raw)
   if (isPlaceholder(value) || value.length < 6) return false
   // A plain lower-case word ("token: expired", "secret: rotated") is prose.
   return !/^[a-z]+$/.test(value)
@@ -105,7 +114,7 @@ const BASE_RULES: Rule[] = [
     ),
     group: 1,
     accept: (m) => {
-      const value = (m[1] ?? "").replace(/[.!?:]+$/, "")
+      const value = stripTrailingPunctuation(m[1] ?? "")
       return value.length >= 8 && !isPlaceholder(value)
     },
   },
