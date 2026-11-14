@@ -521,6 +521,43 @@ describe("the activity filters", () => {
     expect(words.json.total).toBe(3)
   })
 
+  it("shows an agent which settings and suppression fields changed, never their values; the owner sees them", async () => {
+    const domain = "lantern-internal.example"
+    const changed = await call("/settings", {
+      method: "PATCH",
+      owner: true,
+      body: { privateDomains: [domain], telegramChatId: "424242" },
+    })
+    expect(changed.status).toBe(200)
+    const started = await call("/threads/start", {
+      method: "POST",
+      token: AGENT,
+      body: { threadId: "thread-hidden", parentThreadId: null, title: "Shed" },
+    })
+    expect((await call(`/items/${started.json.data.item.id}`, { method: "DELETE", owner: true })).status).toBe(204)
+
+    const settingsRows = await call("/audit?entityType=settings", { token: AGENT })
+    expect(settingsRows.status).toBe(200)
+    expect(settingsRows.json.data).toEqual([
+      expect.objectContaining({ action: "settings.update", before: null, after: null }),
+    ])
+    expect(settingsRows.json.data[0].redactedFields).toEqual(
+      expect.arrayContaining(["privateDomains", "telegramChatId"]),
+    )
+    expect(JSON.stringify(settingsRows.json)).not.toMatch(/lantern-internal|424242/)
+    const suppressionRows = await call("/audit?entityType=suppression", { token: AGENT })
+    expect(suppressionRows.json.data).toEqual([
+      expect.objectContaining({ action: "suppression.create", before: null, after: null }),
+    ])
+    expect(JSON.stringify(suppressionRows.json)).not.toContain("thread-hidden")
+
+    const forOwner = await call("/audit?entityType=settings", { owner: true })
+    expect(forOwner.json.data[0].after).toMatchObject({ privateDomains: [domain], telegramChatId: "424242" })
+    expect(forOwner.json.data[0]).not.toHaveProperty("redactedFields")
+    const suppressionsForOwner = await call("/audit?entityType=suppression", { owner: true })
+    expect(suppressionsForOwner.json.data[0].after).toMatchObject({ externalId: "thread-hidden" })
+  })
+
   it("refuses a filter it cannot read with validation_failed", async () => {
     for (const query of [
       "actorKind=robot",

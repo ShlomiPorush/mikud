@@ -1,5 +1,22 @@
 import { createHash } from "node:crypto"
-import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm"
+import { isDeepStrictEqual } from "node:util"
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm"
 import { type AuditFilters, uuidSchema } from "../../shared/api.ts"
 import { auditCodesMatching } from "../../shared/audit-search.ts"
 import {
@@ -25,7 +42,7 @@ import {
 } from "../db/schema.ts"
 import { invalid, notFound } from "../errors.ts"
 import { getSettings, previousVisit } from "./admin.ts"
-import type { Ctx } from "./context.ts"
+import type { By, Ctx } from "./context.ts"
 import type { ItemRow } from "./items.ts"
 import type { ProjectRow } from "./projects.ts"
 
@@ -600,7 +617,33 @@ export type AuditCounts = {
   actions: { action: string; count: number }[]
   projects: { projectId: string; count: number }[]
 }
-export type AuditPage = Page<typeof audit.$inferSelect> & { total?: number; counts?: AuditCounts }
+/**
+ * An audit row as its reader sees it. A reader other than the owner gets the rows of settings and suppressions, which
+ * only the owner may read (GET /settings, GET /suppressions), without before and after: `redactedFields` names the
+ * fields that changed instead.
+ */
+export type AuditEntry = typeof audit.$inferSelect & { redactedFields?: string[] }
+export type AuditPage = Page<AuditEntry> & { total?: number; counts?: AuditCounts }
+
+const OWNER_ONLY_AUDIT_ENTITIES = ["settings", "suppression"]
+
+const canReadEverything = (by: By) => by.actor.kind === "owner"
+
+/** The names of the fields whose values differ between before and after, a field on one side only included. */
+function changedFields(before: unknown, after: unknown): string[] {
+  const fields = (value: unknown): Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  const from = fields(before)
+  const to = fields(after)
+  const names = new Set([...Object.keys(from), ...Object.keys(to)])
+  return [...names].filter((name) => !(name in from && name in to && isDeepStrictEqual(from[name], to[name]))).sort()
+}
+
+/** The row as `by` may read it (AuditEntry). The stored row is never changed. */
+export function auditEntryFor(by: By, row: typeof audit.$inferSelect): AuditEntry {
+  if (canReadEverything(by) || !OWNER_ONLY_AUDIT_ENTITIES.includes(row.entityType)) return row
+  return { ...row, before: null, after: null, redactedFields: changedFields(row.before, row.after) }
+}
 
 /** The filters that existed before the activity filters: a cursor without a hash still pages with them. */
 const ENTITY_FILTERS = new Set(["entityType", "entityId"])
@@ -637,8 +680,11 @@ function scopeHash(scope: AuditScope): string | null {
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex").slice(0, 12)
 }
 
-/** The search: the stored fields, and the labels of the request's language mapped to their codes. */
-function auditSearch(q: string, language: string | undefined): SQL {
+/**
+ * The search: the stored fields, and the labels of the request's language mapped to their codes. A reader other than
+ * the owner does not match the names that rows of owner-only entities hide from it.
+ */
+function auditSearch(q: string, language: string | undefined, everything: boolean): SQL {
   const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
   // The name the UI shows for a row: an item's title, a project's name, a key's label (ActivityPage entityLabel).
   const label = sql`coalesce(${audit.after}->>'title', ${audit.after}->>'name', ${audit.after}->>'label', ${audit.before}->>'title', ${audit.before}->>'name', ${audit.before}->>'label')`
@@ -646,7 +692,9 @@ function auditSearch(q: string, language: string | undefined): SQL {
     ilike(audit.action, pattern),
     ilike(audit.entityType, pattern),
     ilike(audit.actorLabel, pattern),
-    sql`${label} ilike ${pattern}`,
+    everything
+      ? sql`${label} ilike ${pattern}`
+      : sql`(${notInArray(audit.entityType, OWNER_ONLY_AUDIT_ENTITIES)} and ${label} ilike ${pattern})`,
   ]
   if (language === "he" || language === "en") {
     const codes = auditCodesMatching(language, q)
@@ -660,9 +708,9 @@ type AuditFacet = "actorKind" | "agent" | "action" | "projectId"
 
 /**
  * The one filter of the activity log: the list, the total and every facet count use it (TB-18). `omit` leaves
- * out the filters a facet's own choice replaces.
+ * out the filters a facet's own choice replaces. `everything`: the reader is the owner (auditEntryFor).
  */
-function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): SQL[] {
+function auditConditions(scope: AuditScope, everything: boolean, omit: readonly AuditFacet[] = []): SQL[] {
   const where: SQL[] = []
   const use = (facet: AuditFacet) => !omit.includes(facet)
   if (scope.actorKind && use("actorKind")) where.push(eq(audit.actorKind, scope.actorKind as ActorKind))
@@ -683,7 +731,7 @@ function auditConditions(scope: AuditScope, omit: readonly AuditFacet[] = []): S
     where.push(
       isUuid(scope.entityId) ? sql`lower(${audit.entityId}) = ${scope.entityId}` : eq(audit.entityId, scope.entityId),
     )
-  if (scope.q) where.push(auditSearch(scope.q, scope.lang))
+  if (scope.q) where.push(auditSearch(scope.q, scope.lang, everything))
   return where
 }
 
@@ -710,13 +758,14 @@ const byCount =
  * The audit log, newest first, paged by cursor, narrowed by the filters (docs/api.md, Audit filters). The first
  * page also carries the total and the facet counts; each facet applies every filter but the ones its own choice
  * replaces: a kind choice clears the agent, so the kinds ignore both. One read-only snapshot holds the page and
- * its counts together.
+ * its counts together. `by` is the reader: only the owner reads every row whole (AuditEntry).
  */
-export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise<AuditPage> {
+export async function auditLog(ctx: Ctx, by: By, options: AuditLogOptions = {}): Promise<AuditPage> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
   const scope = auditScope(options)
   const hash = scopeHash(scope)
-  const where = auditConditions(scope)
+  const everything = canReadEverything(by)
+  const where = auditConditions(scope, everything)
   const cursorId = options.cursor ? auditCursor(options.cursor, scope) : null
   return ctx.db.transaction(
     async (tx) => {
@@ -729,7 +778,8 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
       const page = rows.slice(0, limit)
       const last = page[page.length - 1]
       const nextCursor = rows.length > limit && last ? encodeCursor(hash ? [last.id, hash] : [last.id]) : null
-      if (cursorId !== null) return { data: page, nextCursor }
+      const data = page.map((row) => auditEntryFor(by, row))
+      if (cursorId !== null) return { data, nextCursor }
 
       const count = sql<number>`count(*)::int`
       const [totalRow] = await tx
@@ -739,17 +789,23 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
       const kindRows = await tx
         .select({ kind: audit.actorKind, count })
         .from(audit)
-        .where(and(...auditConditions(scope, ["actorKind", "agent"])))
+        .where(and(...auditConditions(scope, everything, ["actorKind", "agent"])))
         .groupBy(audit.actorKind)
       const agentRows = await tx
         .select({ label: audit.actorLabel, count })
         .from(audit)
-        .where(and(...auditConditions(scope, ["agent"]), eq(audit.actorKind, "agent"), isNotNull(audit.actorLabel)))
+        .where(
+          and(
+            ...auditConditions(scope, everything, ["agent"]),
+            eq(audit.actorKind, "agent"),
+            isNotNull(audit.actorLabel),
+          ),
+        )
         .groupBy(audit.actorLabel)
       const actionRows = await tx
         .select({ action: audit.action, count })
         .from(audit)
-        .where(and(...auditConditions(scope, ["action"])))
+        .where(and(...auditConditions(scope, everything, ["action"])))
         .groupBy(audit.action)
       const subject = sql<
         string | null
@@ -759,7 +815,7 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
         .from(audit)
         .leftJoin(items, sql`${audit.entityType} = 'item' and ${items.id}::text = lower(${audit.entityId})`)
         .leftJoin(notes, sql`${audit.entityType} = 'note' and ${notes.id}::text = lower(${audit.entityId})`)
-        .where(and(...auditConditions(scope, ["projectId"])))
+        .where(and(...auditConditions(scope, everything, ["projectId"])))
         .groupBy(subject)
 
       const actorKind = Object.fromEntries(ACTOR_KINDS.map((kind) => [kind, 0])) as Record<ActorKind, number>
@@ -774,7 +830,7 @@ export async function auditLog(ctx: Ctx, options: AuditLogOptions = {}): Promise
           .flatMap((row) => (row.projectId ? [{ projectId: row.projectId, count: row.count }] : []))
           .sort(byCount((row) => row.projectId)),
       }
-      return { data: page, nextCursor, total: totalRow?.count ?? 0, counts }
+      return { data, nextCursor, total: totalRow?.count ?? 0, counts }
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   )

@@ -244,9 +244,9 @@ describe("other read models", () => {
 
   it("pages the audit log by cursor, newest first", async () => {
     for (const title of ["One", "Two", "Three"]) await createItem(t.ctx, agent, { type: "task", title })
-    const first = await auditLog(t.ctx, { limit: 2 })
+    const first = await auditLog(t.ctx, owner, { limit: 2 })
     expect(first.data).toHaveLength(2)
-    const second = await auditLog(t.ctx, { limit: 2, cursor: first.nextCursor ?? "" })
+    const second = await auditLog(t.ctx, owner, { limit: 2, cursor: first.nextCursor ?? "" })
     expect(second.data).toHaveLength(1)
     expect(second.nextCursor).toBeNull()
     const ids = [...first.data, ...second.data].map((r) => r.id)

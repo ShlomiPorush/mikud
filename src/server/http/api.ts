@@ -240,7 +240,7 @@ export function apiRoutes(deps: AuthDeps & { version: string; telegram?: Telegra
   api.post("/capture", async (c) => c.json({ data: await captureItem(ctx, byOf(c), await body(c, captureBody)) }, 201))
   api.get("/inbox", async (c) => c.json({ data: await inbox(ctx) }))
   api.get("/archive", async (c) => c.json(await archive(ctx, query(c, archiveQuery))))
-  api.get("/audit", async (c) => c.json(await auditLog(ctx, query(c, auditQuery))))
+  api.get("/audit", async (c) => c.json(await auditLog(ctx, byOf(c), query(c, auditQuery))))
 
   // --- Notes ---
   api.get("/notes", async (c) => c.json(await findNotes(ctx, query(c, findNotesQuery))))
