@@ -329,6 +329,26 @@ describe("two-factor, required by Adiutor through the account flag", () => {
     expect(twoFactorActions).toEqual(["account.totp_enable", "account.totp_disable", "account.totp_enable"])
   })
 
+  it("G-C, accepted: while the authenticator is replaced, the password alone signs in anywhere and can enrol first", async () => {
+    const replacing = browser()
+    await replacing.owner()
+    const disabled = await replacing.call("POST", "/api/auth/two-factor/disable", { body: { password: TEST_PASSWORD } })
+    expect(disabled.status).toBe(200)
+    // Any browser: the password gives a session that is sent to the setup, not a code challenge.
+    const other = browser()
+    const signIn = await other.passwordSignIn()
+    expect(signIn.status).toBe(200)
+    expect(signIn.json.twoFactorRedirect).toBeUndefined()
+    expect((await v1(other)).json.error.code).toBe("totp_required")
+    expect((await other.call("GET", "/api/setup/status")).json.data.session).toBe("enrol")
+    // Whoever verifies first owns the factor, and the setup page's sign-out of the others ends the replacing browser.
+    const { secret } = await other.enable()
+    expect((await other.verify(totp(secret))).status).toBe(200)
+    expect((await v1(other)).status).toBe(200)
+    expect((await other.call("POST", "/api/auth/revoke-other-sessions", { body: {} })).status).toBe(200)
+    expect((await v1(replacing)).status).toBe(401)
+  })
+
   it("new backup codes replace the old ones and are audited", async () => {
     const b = browser()
     const { backupCodes } = await b.enrolledOwner()

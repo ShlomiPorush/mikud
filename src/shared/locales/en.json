@@ -1035,7 +1035,7 @@
     "done": "Done",
     "newAuthenticator": "Set up a new authenticator",
     "newAuthenticatorTitle": "Set up a new authenticator?",
-    "newAuthenticatorHint": "Enter your password. Two-factor is turned off, and Adiutor takes you straight to setting up the new app. Until you finish, Adiutor stays closed.",
+    "newAuthenticatorHint": "Enter your password. Two-factor is turned off, and Adiutor takes you straight to setting up the new app. Until you finish, your password alone signs in, from any browser, so finish right away.",
     "newAuthenticatorSubmit": "Turn off and set up again",
     "newAuthenticatorBusy": "Turning off...",
     "connectSession": "adiutor connect (agent approval)",

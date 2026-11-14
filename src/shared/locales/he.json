@@ -1035,7 +1035,7 @@
     "done": "סיום",
     "newAuthenticator": "אפליקציית אימות חדשה",
     "newAuthenticatorTitle": "להגדיר אפליקציית אימות חדשה?",
-    "newAuthenticatorHint": "צריך להזין את הסיסמה. האימות הדו-שלבי ייכבה, ו-Adiutor יעבור מיד להגדרת האפליקציה החדשה. עד סיום ההגדרה Adiutor יישאר סגור.",
+    "newAuthenticatorHint": "צריך להזין את הסיסמה. האימות הדו-שלבי ייכבה, ו-Adiutor יעבור מיד להגדרת האפליקציה החדשה. עד סיום ההגדרה הסיסמה לבדה מספיקה כדי להיכנס מכל דפדפן, ולכן כדאי לסיים מיד.",
     "newAuthenticatorSubmit": "כיבוי והגדרה מחדש",
     "newAuthenticatorBusy": "מכבה...",
     "connectSession": "adiutor connect (אישור סוכן)",
